@@ -108,16 +108,24 @@ namespace ShiftYar.Application.Features.UserModel.Services
         {
             try
             {
-                _logger.LogInformation("Creating new user with NationalCode: {NationalCode}", dto.NationalCode);
-
-                if (!string.IsNullOrEmpty(dto.NationalCode))
+                _logger.LogInformation("Creating new user with PhoneNumberMembership: {PhoneNumberMembership}", dto.PhoneNumberMembership);
+                if (string.IsNullOrEmpty(dto.PhoneNumberMembership))
                 {
-                    var exists = await _repository.ExistsAsync(u => u.NationalCode == dto.NationalCode);
-                    if (exists)
-                    {
-                        _logger.LogWarning("User creation failed - NationalCode {NationalCode} already exists", dto.NationalCode);
-                        return ApiResponse<UserDtoAdd>.Fail("کاربری با این کد ملی وجود دارد.");
-                    }
+                    _logger.LogWarning("User creation failed - PhoneNumberMembership Is Empty");
+                    return ApiResponse<UserDtoAdd>.Fail("شماره موبایل کاربر نمی تواند خالی باشد.");
+                }
+
+                if(dto.PhoneNumberMembership.Length != 11)
+                {
+                    _logger.LogWarning("User creation failed - PhoneNumberMembership Is Invalid");
+                    return ApiResponse<UserDtoAdd>.Fail("شماره موبایل کاربر نامعتبر است.");
+                }
+
+                var exists = await _repository.ExistsAsync(u => u.PhoneNumberMembership == dto.PhoneNumberMembership);
+                if (exists)
+                {
+                    _logger.LogWarning("User creation failed - PhoneNumberMembership {PhoneNumberMembership} already exists", dto.PhoneNumberMembership);
+                    return ApiResponse<UserDtoAdd>.Fail("کاربری با شماره موبایل وجود دارد.");
                 }
 
                 var user = _mapper.Map<User>(dto);
