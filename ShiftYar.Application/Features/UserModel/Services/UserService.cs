@@ -158,6 +158,26 @@ namespace ShiftYar.Application.Features.UserModel.Services
         ///Create User Supervisor And Send Otp For Login
         public async Task<ApiResponse<string>> CreateSupervisorAndSendOtpAsync(UserDtoAdd userDto)
         {
+            _logger.LogInformation("Creating new user with PhoneNumberMembership: {PhoneNumberMembership}", userDto.PhoneNumberMembership);
+            if (string.IsNullOrEmpty(userDto.PhoneNumberMembership))
+            {
+                _logger.LogWarning("User creation failed - PhoneNumberMembership Is Empty");
+                return ApiResponse<string>.Fail("شماره موبایل کاربر نمی تواند خالی باشد.");
+            }
+
+            if (userDto.PhoneNumberMembership.Length != 11)
+            {
+                _logger.LogWarning("User creation failed - PhoneNumberMembership Is Invalid");
+                return ApiResponse<string>.Fail("شماره موبایل کاربر نامعتبر است.");
+            }
+
+            var exists = await _repository.ExistsAsync(u => u.PhoneNumberMembership == userDto.PhoneNumberMembership);
+            if (exists)
+            {
+                _logger.LogWarning("User creation failed - PhoneNumberMembership {PhoneNumberMembership} already exists", userDto.PhoneNumberMembership);
+                return ApiResponse<string>.Fail("کاربری با این شماره موبایل وجود دارد.");
+            }
+
             //نقش سوپروایزر را پیدا کن
             var roleFilter = new RoleModel.Filters.RoleFilter { Name = "سوپروایزر", PageSize = 1 };
             var roles = await _roleService.GetFilteredRolesAsync(roleFilter);
