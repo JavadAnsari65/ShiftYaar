@@ -5,6 +5,7 @@ using System.ComponentModel.DataAnnotations;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using static ShiftYar.Domain.Enums.ShiftModel.ShiftEnums;
 using static ShiftYar.Domain.Enums.UserModel.UserEnums;
 
 namespace ShiftYar.Application.DTOs.UserModel
@@ -40,6 +41,12 @@ namespace ShiftYar.Application.DTOs.UserModel
         public string? Image { get; set; }
         public int? DepartmentId { get; set; }
         public int? SpecialtyId { get; set; }
+
+        //کاربر چه نوع شیفتی میدهد؟
+        public ShiftTypes? ShiftType { get; set; }
+        public ShiftSubTypes? ShiftSubType { get; set; }
+        //اگر دو نوبت کاری هست، کدوم شیفت ها رو قراره بیاد
+        public TwoShiftRotationPattern? TwoShiftRotationPattern { get; set; }
 
         //هر کاربر میتواند چند شماره داشته باشد
         public List<string>? OtherPhoneNumbers { get; set; }

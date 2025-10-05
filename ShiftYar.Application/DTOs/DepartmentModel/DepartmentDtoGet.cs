@@ -19,6 +19,7 @@ namespace ShiftYar.Application.DTOs.DepartmentModel
         public HospitalDto? Hospital { get; set; }
         public int? SupervisorId { get; set; }
         public SupervisorDto? Supervisor { get; set; }
+        public bool? IsNightLover { get; set; }  //این بخش شب دوست است یا شب گریز. برای تقسیم شیفتهای شب
         public List<UserDto>? DepartmentUsers { get; set; }
     }
 

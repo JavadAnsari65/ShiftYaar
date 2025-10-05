@@ -8,6 +8,30 @@ namespace ShiftYar.Domain.Enums.ShiftModel
 {
     public class ShiftEnums
     {
+        //انواع شیفت
+        public enum ShiftTypes
+        {
+            FixedShift = 0,        //شیفت ثابت
+            RotatingShift = 1      //شیفت درگردش
+        }
+
+        //انواع زیر شیفت
+        public enum ShiftSubTypes
+        {
+            FixedMorning = 0,  //فیکس صبح
+            FixedEvening = 1,  //فیکس عصر
+            TwoShifts = 2,     //گردشی دونوبت کاری
+            ThreeShifts = 3    //گردشی سه نوبت کاری
+        }
+
+        //حالات شیفت گردشی دونوبت کاری
+        public enum TwoShiftRotationPattern
+        {
+            MorningEvening = 0,  // صبح/عصر
+            MorningNight = 1,    // صبح/شب
+            EveningNight = 2,    // عصر/شب
+        }
+
         public enum ShiftLabel
         {
             Morning = 0,  //شیفت صبح

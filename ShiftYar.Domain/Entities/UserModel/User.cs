@@ -10,6 +10,7 @@ using System.Diagnostics.Contracts;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using static ShiftYar.Domain.Enums.ShiftModel.ShiftEnums;
 using static ShiftYar.Domain.Enums.UserModel.UserEnums;
 
 namespace ShiftYar.Domain.Entities.UserModel
@@ -42,6 +43,12 @@ namespace ShiftYar.Domain.Entities.UserModel
         [ForeignKey("Specialty")]
         public int? SpecialtyId { get; set; }    //اول باید تخصص های درون دپارتمان بیمارستان را که قبلا توسط سوپروایزر ایجاد شده بگیریم و بعد از آن، تخصص را به کاربر نسبت بدهیم
         public Specialty? Specialty { get; set; }
+
+        //کاربر چه نوع شیفتی میدهد؟
+        public ShiftTypes? ShiftType { get; set; }
+        public ShiftSubTypes? ShiftSubType { get; set; }
+        //اگر دو نوبت کاری هست، کدوم زوج شیفت رو قراره بیاد
+        public TwoShiftRotationPattern? TwoShiftRotationPattern { get; set; }
 
         public List<UserPhoneNumber>? OtherPhoneNumbers { get; set; }
 
@@ -76,6 +83,9 @@ namespace ShiftYar.Domain.Entities.UserModel
             this.Department = null;
             this.SpecialtyId = null;
             this.Specialty = null;
+            this.ShiftSubType = null;
+            this.ShiftType = null;
+            this.TwoShiftRotationPattern = null;
         }
     }
 }

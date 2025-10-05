@@ -25,6 +25,8 @@ namespace ShiftYar.Domain.Entities.DepartmentModel
         public int? SupervisorId { get; set; }   //تعیین مسئول بخش
         public User? Supervisor { get; set; }
 
+        public bool? IsNightLover { get; set; }  //این بخش شب دوست است یا شب گریز. برای تقسیم شیفتهای شب
+
         public ICollection<User>? DepartmentUsers { get; set; } // لیست کاربرانی که به این دپارتمان تعلق دارند
 
         public Department()
@@ -37,6 +39,7 @@ namespace ShiftYar.Domain.Entities.DepartmentModel
             this.Hospital = null;
             this.SupervisorId = null;
             this.Supervisor = null;
+            this.IsNightLover = null;
             this.DepartmentUsers = new List<User>();
         }
     }

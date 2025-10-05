@@ -21,5 +21,7 @@ namespace ShiftYar.Application.DTOs.DepartmentModel
 
         [Required(ErrorMessage = "شناسه مسئول بخش الزامی است.")]
         public int? SupervisorId { get; set; }
+
+        public bool? IsNightLover { get; set; }  //این بخش شب دوست است یا شب گریز. برای تقسیم شیفتهای شب
     }
 }

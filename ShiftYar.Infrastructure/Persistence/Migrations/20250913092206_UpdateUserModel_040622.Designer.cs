@@ -3,6 +3,7 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using ShiftYar.Infrastructure.Persistence.AppDbContext;
 
@@ -11,9 +12,11 @@ using ShiftYar.Infrastructure.Persistence.AppDbContext;
 namespace ShiftYar.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(ShiftYarDbContext))]
-    partial class ShiftYarDbContextModelSnapshot : ModelSnapshot
+    [Migration("20250913092206_UpdateUserModel_040622")]
+    partial class UpdateUserModel_040622
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -83,9 +86,6 @@ namespace ShiftYar.Infrastructure.Persistence.Migrations
                         .HasColumnType("int");
 
                     b.Property<bool?>("IsActive")
-                        .HasColumnType("bit");
-
-                    b.Property<bool?>("IsNightLover")
                         .HasColumnType("bit");
 
                     b.Property<string>("Name")
@@ -840,9 +840,6 @@ namespace ShiftYar.Infrastructure.Persistence.Migrations
                         .HasColumnType("int");
 
                     b.Property<int?>("TheUserId")
-                        .HasColumnType("int");
-
-                    b.Property<int?>("TwoShiftRotationPattern")
                         .HasColumnType("int");
 
                     b.Property<DateTime?>("UpdateDate")
