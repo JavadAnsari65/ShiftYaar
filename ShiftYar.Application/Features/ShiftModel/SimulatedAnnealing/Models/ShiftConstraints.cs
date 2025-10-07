@@ -31,13 +31,13 @@ namespace ShiftYar.Application.Features.ShiftModel.SimulatedAnnealing.Models
         public UserGender Gender { get; set; }
         public int SpecialtyId { get; set; }
         public string SpecialtyName { get; set; } = string.Empty;
-        public List<DateTime> UnavailableDates { get; set; } = new List<DateTime>();
-        public List<ShiftLabel> PreferredShifts { get; set; } = new List<ShiftLabel>();
-        public List<ShiftLabel> UnwantedShifts { get; set; } = new List<ShiftLabel>();
-        public int MaxConsecutiveShifts { get; set; } = 3;
-        public int MinRestDaysBetweenShifts { get; set; } = 1;
-        public int MaxShiftsPerWeek { get; set; } = 5;
-        public int MaxNightShiftsPerMonth { get; set; } = 8;
+        public List<DateTime> UnavailableDates { get; set; } = new List<DateTime>();      //تاریخ‌های غیرقابل دسترس
+        public List<ShiftLabel> PreferredShifts { get; set; } = new List<ShiftLabel>();   //شیفت‌های ترجیحی
+        public List<ShiftLabel> UnwantedShifts { get; set; } = new List<ShiftLabel>();    //شیفت‌های ناخواسته
+        public int MaxConsecutiveShifts { get; set; } = 3;    //حداکثر شیفت‌های متوالی
+        public int MinRestDaysBetweenShifts { get; set; } = 1;  //حداقل استراحت بین شیفت‌ها
+        public int MaxShiftsPerWeek { get; set; } = 5;   //حداکثر شیفت در هر هفته
+        public int MaxNightShiftsPerMonth { get; set; } = 8;    //حداکثر شیفت شب در ماه
         public bool CanBeShiftManager { get; set; }
         public ShiftTypes ShiftType { get; set; }
         public ShiftSubTypes ShiftSubType { get; set; }
@@ -77,14 +77,14 @@ namespace ShiftYar.Application.Features.ShiftModel.SimulatedAnnealing.Models
     /// </summary>
     public class GlobalConstraints
     {
-        public bool AllowConsecutiveNightShifts { get; set; } = false;
-        public int MaxConsecutiveNightShifts { get; set; } = 2;
-        public bool RequireGenderBalance { get; set; } = true;
+        public bool AllowConsecutiveNightShifts { get; set; } = false;  //اجازه شیفت‌های شبانه متوالی
+        public int MaxConsecutiveNightShifts { get; set; } = 2; //حداکثر شیفت‌های شب متوالی
+        public bool RequireGenderBalance { get; set; } = true;  //نیازمند تعادل جنسیتی
         public double MinGenderBalanceRatio { get; set; } = 0.3; // حداقل 30% از هر جنسیت
-        public bool PreferSpecialtyMatch { get; set; } = true;
-        public int MaxShiftsPerDay { get; set; } = 1;
-        public bool AllowWeekendShifts { get; set; } = true;
-        public bool RequireShiftManager { get; set; } = true;
+        public bool PreferSpecialtyMatch { get; set; } = true;  //مطابقت با تخصص
+        public int MaxShiftsPerDay { get; set; } = 1;   //حداکثر شیفت در روز
+        public bool AllowWeekendShifts { get; set; } = true;    //مجاز کردن شیفت‌های آخر هفته
+        public bool RequireShiftManager { get; set; } = true;   //نیاز به مدیر شیفت
     }
 
     /// <summary>
