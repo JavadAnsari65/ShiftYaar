@@ -1,4 +1,5 @@
 ﻿using AutoMapper;
+using ShiftYar.Application.DTOs.DepartmentModel;
 using ShiftYar.Application.DTOs.UserModel;
 using ShiftYar.Domain.Entities.DepartmentModel;
 using ShiftYar.Domain.Entities.RoleModel;
@@ -87,6 +88,10 @@ namespace ShiftYar.Application.Common.Mappings
                             IsActive = r.Role.IsActive
                         } : null
                     }).ToList()));
+
+            // DepartmentSchedulingSettings mappings
+            CreateMap<DepartmentSchedulingSettings, DepartmentSchedulingSettingsDtoGet>();
+            CreateMap<DepartmentSchedulingSettingsDtoAdd, DepartmentSchedulingSettings>();
         }
     }
 }

@@ -32,6 +32,7 @@ namespace ShiftYar.Infrastructure.Persistence.AppDbContext
         public DbSet<HospitalPhoneNumber> HospitalPhoneNumbers { get; set; }
         public DbSet<Department> Departments { get; set; }
         public DbSet<DepartmentName> DepartmentNames { get; set; }
+        public DbSet<DepartmentSchedulingSettings> DepartmentSchedulingSettings { get; set; }
         public DbSet<User> Users { get; set; }
         public DbSet<RefreshToken> RefreshTokens { get; set; }
         public DbSet<LoginHistory> LoginHistories { get; set; }

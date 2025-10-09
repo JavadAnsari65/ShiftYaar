@@ -64,6 +64,7 @@ namespace ShiftYar.Application
             services.AddScoped<ISmsTemplateService, SmsTemplateService>();
             services.AddScoped<ISmsService, SmsService>();
             services.AddScoped<IShiftSchedulingService, ShiftSchedulingService>();
+            services.AddScoped<IDepartmentSchedulingSettingsService, DepartmentSchedulingSettingsService>();
         }
     }
 }

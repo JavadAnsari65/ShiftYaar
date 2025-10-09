@@ -23,12 +23,12 @@ namespace ShiftYar.Domain.Entities.ShiftModel
         public int? SpecialtyId { get; set; }
         public Specialty? Specialty { get; set; }
 
-        public int? RequiredMaleCount { get; set; } // حداقل تعداد نیروهای مرد
-        public int? RequiredFemaleCount { get; set; } // حداقل تعداد نیروهای زن
+        public int? RequiredMaleCount { get; set; } //حداقل تعداد نیروهای مرد
+        public int? RequiredFemaleCount { get; set; } //حداقل تعداد نیروهای زن
         public int? RequiredTottalCount { get; set; }  //تعداد کل نیروهای موردنیاز در شیفت صرفنظر از جنسیت
 
-        public int? OnCallMaleCount { get; set; } // حداقل تعداد نیروهای مرد آنکال
-        public int? OnCallFemaleCount { get; set; } // حداقل تعداد نیروهای زن آنکال
+        public int? OnCallMaleCount { get; set; } //حداقل تعداد نیروهای مرد آنکال
+        public int? OnCallFemaleCount { get; set; } //حداقل تعداد نیروهای زن آنکال
         public int? OnCallTottalCount { get; set; }  //تعداد کل نیروهای آنکال شیفت صرفنظر از جنسیت
 
         public ShiftRequiredSpecialty()

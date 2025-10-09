@@ -26,6 +26,7 @@ namespace ShiftYar.Application.Features.ShiftModel.Services
         private readonly IEfRepository<User> _userRepository;
         private readonly IEfRepository<Shift> _shiftRepository;
         private readonly IEfRepository<Department> _departmentRepository;
+        private readonly IEfRepository<DepartmentSchedulingSettings> _deptSettingsRepository;
         private readonly IEfRepository<Specialty> _specialtyRepository;
         private readonly IEfRepository<ShiftRequiredSpecialty> _shiftRequiredSpecialtyRepository;
         private readonly IEfRepository<ShiftAssignment> _shiftAssignmentRepository;
@@ -35,6 +36,7 @@ namespace ShiftYar.Application.Features.ShiftModel.Services
             IEfRepository<User> userRepository,
             IEfRepository<Shift> shiftRepository,
             IEfRepository<Department> departmentRepository,
+            IEfRepository<DepartmentSchedulingSettings> deptSettingsRepository,
             IEfRepository<Specialty> specialtyRepository,
             IEfRepository<ShiftRequiredSpecialty> shiftRequiredSpecialtyRepository,
             IEfRepository<ShiftAssignment> shiftAssignmentRepository,
@@ -43,6 +45,7 @@ namespace ShiftYar.Application.Features.ShiftModel.Services
             _userRepository = userRepository;
             _shiftRepository = shiftRepository;
             _departmentRepository = departmentRepository;
+            _deptSettingsRepository = deptSettingsRepository;
             _specialtyRepository = specialtyRepository;
             _shiftRequiredSpecialtyRepository = shiftRequiredSpecialtyRepository;
             _shiftAssignmentRepository = shiftAssignmentRepository;
@@ -273,6 +276,27 @@ namespace ShiftYar.Application.Features.ShiftModel.Services
                     EndDate = request.EndDate
                 };
 
+                // تنظیم قوانین قطعی/اختیاری بر اساس تنظیمات دپارتمان
+                var department = await _departmentRepository.GetByIdAsync(request.DepartmentId);
+                if (department != null)
+                {
+                    // پیش‌فرض: برخی قوانین به صورت نرم در نظر گرفته می‌شوند
+                    constraints.HardRules.EnforceWeeklyMaxShifts = false;
+                    constraints.HardRules.EnforceNightShiftMonthlyCap = false;
+
+                    // وزن‌دهی شب‌دوستی/شب‌گریزی دپارتمان
+                    if (department.IsNightLover == true)
+                    {
+                        // دپارتمان شب‌دوست: سخت‌گیری کمتر روی سقف شب‌ها
+                        constraints.SoftWeights.MonthlyNightCapWeight = 0.5;
+                    }
+                    else if (department.IsNightLover == false)
+                    {
+                        // دپارتمان شب‌گریز: سخت‌گیری بیشتر روی سقف شب‌ها
+                        constraints.SoftWeights.MonthlyNightCapWeight = 2.0;
+                    }
+                }
+
                 // بارگذاری کاربران دپارتمان
                 var users = await _userRepository.GetByFilterAsync(
                     filter: null,
@@ -357,6 +381,38 @@ namespace ShiftYar.Application.Features.ShiftModel.Services
                     }
 
                     constraints.ShiftRequirements.Add(shiftRequirement);
+                }
+
+                // بارگذاری تنظیمات زمان‌بندی از جدول مخصوص
+                var settings = await _deptSettingsRepository.GetByFilterAsync(
+                    filter: new Features.DepartmentModel.Filters.DepartmentSchedulingSettingsFilter
+                    {
+                        DepartmentId = request.DepartmentId,
+                        PageNumber = 1,
+                        PageSize = 1
+                    },
+                    includes: null
+                );
+                var deptSetting = settings.Items.FirstOrDefault();
+                if (deptSetting != null)
+                {
+                    // Map hard rules
+                    if (deptSetting.ForbidUnavailableDates.HasValue) constraints.HardRules.ForbidUnavailableDates = deptSetting.ForbidUnavailableDates.Value;
+                    if (deptSetting.ForbidDuplicateDailyAssignments.HasValue) constraints.HardRules.ForbidDuplicateDailyAssignments = deptSetting.ForbidDuplicateDailyAssignments.Value;
+                    if (deptSetting.EnforceMaxShiftsPerDay.HasValue) constraints.HardRules.EnforceMaxShiftsPerDay = deptSetting.EnforceMaxShiftsPerDay.Value;
+                    if (deptSetting.EnforceMinRestDays.HasValue) constraints.HardRules.EnforceMinRestDays = deptSetting.EnforceMinRestDays.Value;
+                    if (deptSetting.EnforceMaxConsecutiveShifts.HasValue) constraints.HardRules.EnforceMaxConsecutiveShifts = deptSetting.EnforceMaxConsecutiveShifts.Value;
+                    if (deptSetting.EnforceWeeklyMaxShifts.HasValue) constraints.HardRules.EnforceWeeklyMaxShifts = deptSetting.EnforceWeeklyMaxShifts.Value;
+                    if (deptSetting.EnforceNightShiftMonthlyCap.HasValue) constraints.HardRules.EnforceNightShiftMonthlyCap = deptSetting.EnforceNightShiftMonthlyCap.Value;
+                    if (deptSetting.EnforceSpecialtyCapacity.HasValue) constraints.HardRules.EnforceSpecialtyCapacity = deptSetting.EnforceSpecialtyCapacity.Value;
+
+                    // Map soft weights
+                    if (deptSetting.GenderBalanceWeight.HasValue) constraints.SoftWeights.GenderBalanceWeight = deptSetting.GenderBalanceWeight.Value;
+                    if (deptSetting.SpecialtyPreferenceWeight.HasValue) constraints.SoftWeights.SpecialtyPreferenceWeight = deptSetting.SpecialtyPreferenceWeight.Value;
+                    if (deptSetting.UserUnwantedShiftWeight.HasValue) constraints.SoftWeights.UserUnwantedShiftWeight = deptSetting.UserUnwantedShiftWeight.Value;
+                    if (deptSetting.UserPreferredShiftWeight.HasValue) constraints.SoftWeights.UserPreferredShiftWeight = deptSetting.UserPreferredShiftWeight.Value;
+                    if (deptSetting.WeeklyMaxWeight.HasValue) constraints.SoftWeights.WeeklyMaxWeight = deptSetting.WeeklyMaxWeight.Value;
+                    if (deptSetting.MonthlyNightCapWeight.HasValue) constraints.SoftWeights.MonthlyNightCapWeight = deptSetting.MonthlyNightCapWeight.Value;
                 }
 
                 return constraints;

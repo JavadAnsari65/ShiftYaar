@@ -19,6 +19,10 @@ namespace ShiftYar.Application.Features.ShiftModel.SimulatedAnnealing.Models
         public List<UserConstraint> UserConstraints { get; set; } = new List<UserConstraint>();
         public List<ShiftRequirement> ShiftRequirements { get; set; } = new List<ShiftRequirement>();
         public GlobalConstraints GlobalConstraints { get; set; } = new GlobalConstraints();
+        // قوانین قطعی (سراسری برای همه دپارتمان‌ها)
+        public HardRuleSet HardRules { get; set; } = HardRuleSet.CreateDefault();
+        // وزن قوانین اختیاری (قابل تنظیم per-department)
+        public SoftRuleWeights SoftWeights { get; set; } = SoftRuleWeights.CreateDefault();
     }
 
     /// <summary>
@@ -86,6 +90,46 @@ namespace ShiftYar.Application.Features.ShiftModel.SimulatedAnnealing.Models
         public bool AllowWeekendShifts { get; set; } = true;    //مجاز کردن شیفت‌های آخر هفته
         public bool RequireShiftManager { get; set; } = true;   //نیاز به مدیر شیفت
     }
+
+
+    /// <summary>
+	/// قوانین قطعی که باید همیشه رعایت شوند
+	/// </summary>
+	public class HardRuleSet
+    {
+        public bool ForbidUnavailableDates { get; set; } = true; // عدم انتساب در تاریخ‌های غیرقابل دسترس
+        public bool ForbidDuplicateDailyAssignments { get; set; } = true; // هر کاربر حداکثر یک شیفت در روز
+        public bool EnforceMaxShiftsPerDay { get; set; } = true; // از GlobalConstraints.MaxShiftsPerDay
+        public bool EnforceMinRestDays { get; set; } = true; // حداقل فاصله استراحت
+        public bool EnforceMaxConsecutiveShifts { get; set; } = true; // حداکثر شیفت‌های متوالی
+        public bool EnforceWeeklyMaxShifts { get; set; } = false; // می‌تواند نرم نیز باشد
+        public bool EnforceNightShiftMonthlyCap { get; set; } = false; // می‌تواند نرم نیز باشد
+        public bool EnforceSpecialtyCapacity { get; set; } = true; // عدم تجاوز از ظرفیت موردنیاز هر تخصص/شیفت/روز
+
+        public static HardRuleSet CreateDefault()
+        {
+            return new HardRuleSet();
+        }
+    }
+
+    /// <summary>
+    /// وزن قوانین نرم (اختیاری) که per-department قابل تنظیم هستند
+    /// </summary>
+    public class SoftRuleWeights
+    {
+        public double GenderBalanceWeight { get; set; } = 1.0;
+        public double SpecialtyPreferenceWeight { get; set; } = 1.0;
+        public double UserUnwantedShiftWeight { get; set; } = 1.0;
+        public double UserPreferredShiftWeight { get; set; } = 1.0; // به عنوان پاداش منفی استفاده می‌شود
+        public double WeeklyMaxWeight { get; set; } = 1.0;
+        public double MonthlyNightCapWeight { get; set; } = 1.0;
+
+        public static SoftRuleWeights CreateDefault()
+        {
+            return new SoftRuleWeights();
+        }
+    }
+
 
     /// <summary>
     /// پارامترهای الگوریتم Simulated Annealing
