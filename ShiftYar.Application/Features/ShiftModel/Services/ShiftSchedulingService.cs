@@ -1,20 +1,24 @@
-﻿using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging;
 using ShiftYar.Application.Common.Models.ResponseModel;
 using ShiftYar.Application.DTOs.ShiftModel.ShiftSchedulingModel;
+using ShiftYar.Application.DTOs.ProductivityModel;
 using ShiftYar.Application.Features.ShiftModel.SimulatedAnnealing.Models;
 using ShiftYar.Application.Features.ShiftModel.SimulatedAnnealing;
 using ShiftYar.Application.Interfaces.Persistence;
 using ShiftYar.Application.Interfaces.ShiftModel;
+using ShiftYar.Application.Interfaces.ProductivityModel;
+using ShiftYar.Application.Interfaces.Settings;
 using ShiftYar.Domain.Entities.DepartmentModel;
 using ShiftYar.Domain.Entities.ShiftModel;
+using ShiftYar.Domain.Entities.ShiftDateModel;
 using ShiftYar.Domain.Entities.UserModel;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 using static ShiftYar.Domain.Enums.ShiftModel.ShiftEnums;
 using static ShiftYar.Domain.Enums.UserModel.UserEnums;
+using ShiftYar.Application.Features.ShiftModel.OrTools.Models;
+using ShiftYar.Application.Features.ShiftModel.OrTools;
+using ShiftYar.Application.Features.ShiftModel.Hybrid;
+using System.Globalization;
+using ShiftYar.Application.Common.Utilities;
 
 namespace ShiftYar.Application.Features.ShiftModel.Services
 {
@@ -29,8 +33,12 @@ namespace ShiftYar.Application.Features.ShiftModel.Services
         private readonly IEfRepository<DepartmentSchedulingSettings> _deptSettingsRepository;
         private readonly IEfRepository<Specialty> _specialtyRepository;
         private readonly IEfRepository<ShiftRequiredSpecialty> _shiftRequiredSpecialtyRepository;
+        private readonly IEfRepository<ShiftYar.Domain.Entities.ShiftRequestModel.ShiftRequest> _shiftRequestRepository; // مخزن درخواست‌های شیفت
         private readonly IEfRepository<ShiftAssignment> _shiftAssignmentRepository;
+        private readonly IEfRepository<ShiftDate> _shiftDateRepository;
+        private readonly IAlgorithmSettingsService _algorithmSettingsService;
         private readonly ILogger<ShiftSchedulingService> _logger;
+        private readonly IWorkingHoursCalculator _workingHoursCalculator;
 
         public ShiftSchedulingService(
             IEfRepository<User> userRepository,
@@ -40,6 +48,10 @@ namespace ShiftYar.Application.Features.ShiftModel.Services
             IEfRepository<Specialty> specialtyRepository,
             IEfRepository<ShiftRequiredSpecialty> shiftRequiredSpecialtyRepository,
             IEfRepository<ShiftAssignment> shiftAssignmentRepository,
+            IEfRepository<ShiftDate> shiftDateRepository,
+            IEfRepository<ShiftYar.Domain.Entities.ShiftRequestModel.ShiftRequest> shiftRequestRepository,
+            IAlgorithmSettingsService algorithmSettingsService,
+            IWorkingHoursCalculator workingHoursCalculator,
             ILogger<ShiftSchedulingService> logger)
         {
             _userRepository = userRepository;
@@ -49,6 +61,10 @@ namespace ShiftYar.Application.Features.ShiftModel.Services
             _specialtyRepository = specialtyRepository;
             _shiftRequiredSpecialtyRepository = shiftRequiredSpecialtyRepository;
             _shiftAssignmentRepository = shiftAssignmentRepository;
+            _shiftDateRepository = shiftDateRepository;
+            _shiftRequestRepository = shiftRequestRepository;
+            _algorithmSettingsService = algorithmSettingsService;
+            _workingHoursCalculator = workingHoursCalculator;
             _logger = logger;
         }
 
@@ -59,7 +75,8 @@ namespace ShiftYar.Application.Features.ShiftModel.Services
         {
             try
             {
-                _logger.LogInformation("Starting shift scheduling optimization for department {DepartmentId}", request.DepartmentId);
+                _logger.LogInformation("Starting shift scheduling optimization for department {DepartmentId} using algorithm {Algorithm}",
+                    request.DepartmentId, request.Algorithm);
 
                 // بارگذاری داده‌های مورد نیاز
                 var constraints = await LoadConstraintsAsync(request);
@@ -68,25 +85,90 @@ namespace ShiftYar.Application.Features.ShiftModel.Services
                     return ApiResponse<ShiftSchedulingResultDto>.Fail("Failed to load constraints");
                 }
 
-                // ایجاد پارامترهای الگوریتم
-                var parameters = new SimulatedAnnealingParameters
+                // جلوگیری از اجرای زمان‌بندی در صورت وجود درخواست‌های در وضعیت Pending در بازه هدف
+                var pendingExists = await _shiftRequestRepository.ExistsAsync(x =>
+                    x.Status == Domain.Enums.ShiftRequestModel.RequestStatus.Pending &&
+                    x.User != null &&
+                    x.User.DepartmentId == request.DepartmentId &&
+                    x.RequestDate >= DateConverter.ConvertToGregorianDate(request.StartDate) &&
+                    x.RequestDate <= DateConverter.ConvertToGregorianDate(request.EndDate)
+                );
+                if (pendingExists)
                 {
-                    InitialTemperature = request.Parameters.InitialTemperature,
-                    FinalTemperature = request.Parameters.FinalTemperature,
-                    CoolingRate = request.Parameters.CoolingRate,
-                    MaxIterations = request.Parameters.MaxIterations,
-                    MaxIterationsWithoutImprovement = request.Parameters.MaxIterationsWithoutImprovement
-                };
+                    return ApiResponse<ShiftSchedulingResultDto>.Fail("There are pending shift requests in the selected period. Resolve them before scheduling.");
+                }
 
-                // اجرای الگوریتم
-                var scheduler = new SimulatedAnnealingScheduler(constraints, parameters);
-                var solution = scheduler.Optimize();
+                ShiftSchedulingResultDto result;
 
-                // تبدیل نتیجه به DTO
-                var result = await ConvertSolutionToResultAsync(solution, constraints);
+                switch (request.Algorithm)
+                {
+                    case SchedulingAlgorithm.SimulatedAnnealing:
+                        // بارگذاری پارامترها از DB در صورت NULL بودن
+                        await ApplyAlgorithmSettingsFromDbAsync(request);
+                        result = await OptimizeWithSimulatedAnnealingAsync(request, constraints);
+                        break;
+                    case SchedulingAlgorithm.OrToolsCPSat:
+                        await ApplyAlgorithmSettingsFromDbAsync(request);
+                        result = await OptimizeWithOrToolsAsync(request, constraints);
+                        break;
+                    case SchedulingAlgorithm.Hybrid:
+                        await ApplyAlgorithmSettingsFromDbAsync(request);
+                        result = await OptimizeWithHybridAsync(request, constraints);
+                        break;
+                    default:
+                        result = await OptimizeWithSimulatedAnnealingAsync(request, constraints);
+                        break;
+                }
 
-                _logger.LogInformation("Shift scheduling optimization completed. Final score: {Score}, Iterations: {Iterations}",
-                    result.FinalScore, result.TotalIterations);
+                _logger.LogInformation("Shift scheduling optimization completed. Final score: {Score}, Algorithm: {Algorithm}",
+                    result.FinalScore, result.AlgorithmUsed);
+
+                return ApiResponse<ShiftSchedulingResultDto>.Success(result);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error occurred during shift scheduling optimization");
+                return ApiResponse<ShiftSchedulingResultDto>.Fail($"Error: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// اجرای الگوریتم بهینه‌سازی شیفت‌بندی (نسخه داخلی با تاریخ میلادی)
+        /// </summary>
+        public async Task<ApiResponse<ShiftSchedulingResultDto>> OptimizeShiftScheduleInternalAsync(ShiftSchedulingRequestInternalDto request)
+        {
+            try
+            {
+                _logger.LogInformation("Starting shift scheduling optimization for department {DepartmentId} using algorithm {Algorithm}",
+                    request.DepartmentId, request.Algorithm);
+
+                // بارگذاری داده‌های مورد نیاز
+                var constraints = await LoadConstraintsInternalAsync(request);
+                if (constraints == null)
+                {
+                    return ApiResponse<ShiftSchedulingResultDto>.Fail("Failed to load constraints");
+                }
+
+                ShiftSchedulingResultDto result;
+
+                switch (request.Algorithm)
+                {
+                    case SchedulingAlgorithm.SimulatedAnnealing:
+                        result = await OptimizeWithSimulatedAnnealingInternalAsync(request, constraints);
+                        break;
+                    case SchedulingAlgorithm.OrToolsCPSat:
+                        result = await OptimizeWithOrToolsInternalAsync(request, constraints);
+                        break;
+                    case SchedulingAlgorithm.Hybrid:
+                        result = await OptimizeWithHybridInternalAsync(request, constraints);
+                        break;
+                    default:
+                        result = await OptimizeWithSimulatedAnnealingInternalAsync(request, constraints);
+                        break;
+                }
+
+                _logger.LogInformation("Shift scheduling optimization completed. Final score: {Score}, Algorithm: {Algorithm}",
+                    result.FinalScore, result.AlgorithmUsed);
 
                 return ApiResponse<ShiftSchedulingResultDto>.Success(result);
             }
@@ -110,13 +192,14 @@ namespace ShiftYar.Application.Features.ShiftModel.Services
                     return ApiResponse<object>.Fail("Failed to load constraints");
                 }
 
+                var saParamsFromDb = await GetAlgorithmSettingsAsync(request.DepartmentId, SchedulingAlgorithm.SimulatedAnnealing);
                 var parameters = new SimulatedAnnealingParameters
                 {
-                    InitialTemperature = request.Parameters.InitialTemperature,
-                    FinalTemperature = request.Parameters.FinalTemperature,
-                    CoolingRate = request.Parameters.CoolingRate,
-                    MaxIterations = request.Parameters.MaxIterations,
-                    MaxIterationsWithoutImprovement = request.Parameters.MaxIterationsWithoutImprovement
+                    InitialTemperature = saParamsFromDb.InitialTemperature,
+                    FinalTemperature = saParamsFromDb.FinalTemperature,
+                    CoolingRate = saParamsFromDb.CoolingRate,
+                    MaxIterations = saParamsFromDb.MaxIterations,
+                    MaxIterationsWithoutImprovement = saParamsFromDb.MaxIterationsWithoutImprovement
                 };
 
                 var scheduler = new SimulatedAnnealingScheduler(constraints, parameters);
@@ -151,12 +234,12 @@ namespace ShiftYar.Application.Features.ShiftModel.Services
                 var validationErrors = new List<string>();
 
                 // اعتبارسنجی تاریخ‌ها
-                if (request.StartDate >= request.EndDate)
+                if (DateConverter.ConvertToGregorianDate(request.StartDate) >= DateConverter.ConvertToGregorianDate(request.EndDate))
                 {
                     validationErrors.Add("Start date must be before end date");
                 }
 
-                if (request.EndDate < DateTime.Today)
+                if (DateConverter.ConvertToGregorianDate(request.EndDate) < DateTime.Today)
                 {
                     validationErrors.Add("End date cannot be in the past");
                 }
@@ -167,46 +250,49 @@ namespace ShiftYar.Application.Features.ShiftModel.Services
                 {
                     validationErrors.Add("Department not found");
                 }
-
-                // اعتبارسنجی پارامترهای الگوریتم
-                if (request.Parameters.InitialTemperature <= 0)
+                else if (department.IsActive != true)
                 {
-                    validationErrors.Add("Initial temperature must be positive");
+                    validationErrors.Add("Department is not active");
                 }
 
-                if (request.Parameters.FinalTemperature <= 0)
+                // اعتبارسنجی وجود کاربران فعال در دپارتمان
+                var users = await _userRepository.GetByFilterAsync(
+                    filter: null,
+                    includes: new[] { "Department" }
+                );
+                
+                var activeUsers = users.Items
+                    .Where(u => u.DepartmentId == request.DepartmentId && u.IsActive == true)
+                    .ToList();
+                
+                if (activeUsers.Count == 0)
                 {
-                    validationErrors.Add("Final temperature must be positive");
+                    validationErrors.Add("No active users found in the department");
                 }
 
-                if (request.Parameters.CoolingRate <= 0 || request.Parameters.CoolingRate >= 1)
+                // اعتبارسنجی وجود شیفت‌های تعریف شده
+                var shifts = await _shiftRepository.GetByFilterAsync(
+                    filter: null,
+                    includes: new[] { "Department" }
+                );
+                
+                var departmentShifts = shifts.Items
+                    .Where(s => s.DepartmentId == request.DepartmentId)
+                    .ToList();
+                
+                if (departmentShifts.Count == 0)
                 {
-                    validationErrors.Add("Cooling rate must be between 0 and 1");
+                    validationErrors.Add("No shifts defined for the department");
                 }
 
-                if (request.Parameters.MaxIterations <= 0)
+                // اعتبارسنجی بازه زمانی (حداکثر 3 ماه)
+                var startDate = DateConverter.ConvertToGregorianDate(request.StartDate);
+                var endDate = DateConverter.ConvertToGregorianDate(request.EndDate);
+                var daysDifference = (endDate - startDate).Days;
+                
+                if (daysDifference > 90) // 3 ماه
                 {
-                    validationErrors.Add("Max iterations must be positive");
-                }
-
-                // اعتبارسنجی محدودیت‌های کاربران
-                foreach (var constraint in request.Constraints)
-                {
-                    var user = await _userRepository.GetByIdAsync(constraint.UserId);
-                    if (user == null)
-                    {
-                        validationErrors.Add($"User with ID {constraint.UserId} not found");
-                    }
-
-                    if (constraint.MaxConsecutiveShifts <= 0)
-                    {
-                        validationErrors.Add($"Max consecutive shifts for user {constraint.UserId} must be positive");
-                    }
-
-                    if (constraint.MaxShiftsPerWeek <= 0 || constraint.MaxShiftsPerWeek > 7)
-                    {
-                        validationErrors.Add($"Max shifts per week for user {constraint.UserId} must be between 1 and 7");
-                    }
+                    validationErrors.Add("Scheduling period cannot exceed 3 months");
                 }
 
                 return ApiResponse<List<string>>.Success(validationErrors);
@@ -230,8 +316,44 @@ namespace ShiftYar.Application.Features.ShiftModel.Services
                 // حذف انتساب‌های قبلی برای بازه زمانی مشخص
                 var startDate = result.Assignments.Min(a => a.Date);
                 var endDate = result.Assignments.Max(a => a.Date);
+                var startPersian = DateConverter.ConvertToGregorianDate(
+                    new System.Globalization.PersianCalendar().GetYear(startDate).ToString("0000") + "/" +
+                    new System.Globalization.PersianCalendar().GetMonth(startDate).ToString("00") + "/" +
+                    new System.Globalization.PersianCalendar().GetDayOfMonth(startDate).ToString("00")
+                );
 
-                // TODO: پیاده‌سازی حذف انتساب‌های قبلی
+                // واکشی شناسه‌های تاریخ‌های مورد نیاز
+                var (shiftDates, _) = await _shiftDateRepository.GetByFilterAsync(
+                    new Features.CalendarSeeder.Filters.ShiftDateFilter
+                    {
+                        PersianDateStart = new System.Globalization.PersianCalendar().GetYear(startDate).ToString("0000") + "/" +
+                                          new System.Globalization.PersianCalendar().GetMonth(startDate).ToString("00") + "/" +
+                                          new System.Globalization.PersianCalendar().GetDayOfMonth(startDate).ToString("00"),
+                        PersianDateEnd = new System.Globalization.PersianCalendar().GetYear(endDate).ToString("0000") + "/" +
+                                        new System.Globalization.PersianCalendar().GetMonth(endDate).ToString("00") + "/" +
+                                        new System.Globalization.PersianCalendar().GetDayOfMonth(endDate).ToString("00"),
+                        PageNumber = 1,
+                        PageSize = 1000
+                    }
+                );
+
+                var shiftDateMap = shiftDates
+                    .Where(d => d.Date.HasValue)
+                    .ToDictionary(d => d.Date.Value.Date, d => d.Id ?? 0);
+
+                // حذف انتساب‌های قبلی مرتبط با این بازه زمانی
+                var (existingAssignments, _) = await _shiftAssignmentRepository.GetByFilterAsync(
+                    filter: new Application.Common.Filters.SimpleFilter<ShiftAssignment>(a =>
+                        a.ShiftDateId.HasValue &&
+                        a.ShiftDate != null &&
+                        a.ShiftDate.Date >= startDate && a.ShiftDate.Date <= endDate
+                    ),
+                    includes: "ShiftDate"
+                );
+                foreach (var ea in existingAssignments)
+                {
+                    _shiftAssignmentRepository.Delete(ea);
+                }
 
                 // ذخیره انتساب‌های جدید
                 foreach (var assignment in result.Assignments)
@@ -243,6 +365,12 @@ namespace ShiftYar.Application.Features.ShiftModel.Services
                         IsOnCall = assignment.IsOnCall,
                         Notes = "Generated by Simulated Annealing Algorithm"
                     };
+
+                    // اتصال تاریخ شیفت (ShiftDateId)
+                    if (shiftDateMap.TryGetValue(assignment.Date.Date, out var sdId))
+                    {
+                        shiftAssignment.ShiftDateId = sdId;
+                    }
 
                     await _shiftAssignmentRepository.AddAsync(shiftAssignment);
                 }
@@ -260,20 +388,366 @@ namespace ShiftYar.Application.Features.ShiftModel.Services
             }
         }
 
+        #region Algorithm-Specific Optimization Methods
+
+        /// <summary>
+        /// بهینه‌سازی با الگوریتم Simulated Annealing
+        /// </summary>
+        private async Task<ShiftSchedulingResultDto> OptimizeWithSimulatedAnnealingAsync(ShiftSchedulingRequestDto request, ShiftConstraints constraints) // اجرای SA با پارامترهای ورودی و داده‌های DB
+        {
+                var saParamsFromDb = await GetAlgorithmSettingsAsync(request.DepartmentId, SchedulingAlgorithm.SimulatedAnnealing);
+                var parameters = new SimulatedAnnealingParameters
+                {
+                    InitialTemperature = saParamsFromDb.InitialTemperature,
+                    FinalTemperature = saParamsFromDb.FinalTemperature,
+                    CoolingRate = saParamsFromDb.CoolingRate,
+                    MaxIterations = saParamsFromDb.MaxIterations,
+                    MaxIterationsWithoutImprovement = saParamsFromDb.MaxIterationsWithoutImprovement
+                };
+
+            var scheduler = new SimulatedAnnealingScheduler(constraints, parameters);
+            var solution = scheduler.Optimize();
+            var statistics = scheduler.GetStatistics();
+
+            var result = await ConvertSolutionToResultAsync(solution, constraints);
+            result.AlgorithmUsed = SchedulingAlgorithm.SimulatedAnnealing;
+            result.AlgorithmStatus = "Completed";
+            result.TotalIterations = statistics.TotalIterations;
+            result.ExecutionTime = statistics.ExecutionTime;
+
+            return result;
+        }
+
+        /// <summary>
+        /// بهینه‌سازی با الگوریتم OR-Tools CP-SAT
+        /// </summary>
+        private async Task<ShiftSchedulingResultDto> OptimizeWithOrToolsAsync(ShiftSchedulingRequestDto request, ShiftConstraints constraints) // اجرای OR-Tools با تبدیل قیود و برگرداندن نتیجه
+        {
+            // تبدیل محدودیت‌ها به فرمت OR-Tools
+            var ortoolsConstraints = await ConvertToOrToolsConstraintsAsync(constraints, request);
+
+            var ortParamsFromDb = await GetOrToolsSettingsAsync(request.DepartmentId);
+            var parameters = new OrToolsParameters
+            {
+                MaxTimeInSeconds = ortParamsFromDb.MaxTimeInSeconds,
+                NumSearchWorkers = ortParamsFromDb.NumSearchWorkers,
+                LogSearchProgress = ortParamsFromDb.LogSearchProgress,
+                MaxSolutions = ortParamsFromDb.MaxSolutions,
+                RelativeGapLimit = ortParamsFromDb.RelativeGapLimit
+            };
+
+            var scheduler = new OrToolsCPSatScheduler(ortoolsConstraints, parameters);
+            var solution = scheduler.Optimize();
+            var statistics = scheduler.GetStatistics();
+
+            var result = await ConvertOrToolsSolutionToResultAsync(solution, ortoolsConstraints);
+            result.AlgorithmUsed = SchedulingAlgorithm.OrToolsCPSat;
+            result.AlgorithmStatus = solution.Status.ToString();
+            result.ExecutionTime = solution.SolveTime;
+
+            PopulateProductivityStatistics(result, constraints);
+            return result;
+        }
+
+        /// <summary>
+        /// بهینه‌سازی با الگوریتم ترکیبی
+        /// </summary>
+        private async Task<ShiftSchedulingResultDto> OptimizeWithHybridAsync(ShiftSchedulingRequestDto request, ShiftConstraints constraints) // اجرای الگوریتم ترکیبی با استراتژی خواسته‌شده
+        {
+            // تبدیل محدودیت‌ها به فرمت OR-Tools
+            var ortoolsConstraints = await ConvertToOrToolsConstraintsAsync(constraints, request);
+
+            var saParamsFromDb = await GetAlgorithmSettingsAsync(request.DepartmentId, SchedulingAlgorithm.SimulatedAnnealing);
+            var saParameters = new SimulatedAnnealingParameters
+            {
+                InitialTemperature = saParamsFromDb.InitialTemperature,
+                FinalTemperature = saParamsFromDb.FinalTemperature,
+                CoolingRate = saParamsFromDb.CoolingRate,
+                MaxIterations = saParamsFromDb.MaxIterations,
+                MaxIterationsWithoutImprovement = saParamsFromDb.MaxIterationsWithoutImprovement
+            };
+
+            var ortParamsFromDb = await GetOrToolsSettingsAsync(request.DepartmentId);
+            var ortoolsParameters = new OrToolsParameters
+            {
+                MaxTimeInSeconds = ortParamsFromDb.MaxTimeInSeconds,
+                NumSearchWorkers = ortParamsFromDb.NumSearchWorkers,
+                LogSearchProgress = ortParamsFromDb.LogSearchProgress,
+                MaxSolutions = ortParamsFromDb.MaxSolutions,
+                RelativeGapLimit = ortParamsFromDb.RelativeGapLimit
+            };
+
+            var hyParamsFromDb = await GetHybridSettingsAsync(request.DepartmentId);
+            var hybridParameters = new HybridParameters
+            {
+                Strategy = hyParamsFromDb.Strategy,
+                MaxIterations = hyParamsFromDb.MaxIterations,
+                ComplexityThreshold = hyParamsFromDb.ComplexityThreshold
+            };
+
+            var scheduler = new HybridScheduler(constraints, ortoolsConstraints, saParameters, ortoolsParameters, hybridParameters);
+            var solution = scheduler.Optimize();
+            var statistics = scheduler.GetStatistics();
+
+            var result = await ConvertHybridSolutionToResultAsync(solution, constraints);
+            result.AlgorithmUsed = SchedulingAlgorithm.Hybrid;
+            result.AlgorithmStatus = "Completed";
+
+            PopulateProductivityStatistics(result, constraints);
+            return result;
+        }
+
+        #endregion
+
         #region Private Methods
+        private async Task ApplyAlgorithmSettingsFromDbAsync(ShiftSchedulingRequestDto request)
+        {
+            try
+            {
+                // پارامترهای الگوریتم از دیتابیس خوانده می‌شوند؛ نیازی به تنظیم در اینجا نیست
+            }
+            catch { }
+        }
+
+        private async Task<(double InitialTemperature, double FinalTemperature, double CoolingRate, int MaxIterations, int MaxIterationsWithoutImprovement)> GetAlgorithmSettingsAsync(int departmentId, SchedulingAlgorithm algo)
+        {
+            try
+            {
+                var settingsResponse = await _algorithmSettingsService.GetSettingByDepartmentAndTypeAsync(departmentId, (int)algo);
+                
+                if (settingsResponse.IsSuccess && settingsResponse.Data != null)
+                {
+                    var settings = settingsResponse.Data;
+                    return (
+                        settings.SA_InitialTemperature ?? 1000.0,
+                        settings.SA_FinalTemperature ?? 0.1,
+                        settings.SA_CoolingRate ?? 0.95,
+                        settings.SA_MaxIterations ?? 10000,
+                        settings.SA_MaxIterationsWithoutImprovement ?? 1000
+                    );
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "خطا در دریافت تنظیمات الگوریتم از دیتابیس، از مقادیر پیش‌فرض استفاده می‌شود");
+            }
+
+            // مقادیر پیش‌فرض
+            return (1000.0, 0.1, 0.95, 10000, 1000);
+        }
+
+        private WorkingHoursCalculationResultDto? CalculateProductivitySnapshot(User user, UserConstraint userConstraint, ShiftConstraints constraints, DepartmentSchedulingSettings? deptSetting, double nightShiftDurationHours)
+        {
+            if (user.IncludedProductivityPlan != true)
+            {
+                return null;
+            }
+
+            var staffInfo = new StaffEmploymentInfoDto
+            {
+                StaffId = user.Id ?? 0,
+                StaffFullName = user.FullName,
+                DateOfEmployment = user.DateOfEmployment,
+                // Hardship duty must come from a dedicated field or manual override on the request DTO.
+                // isProjectPersonnel only indicates residency (طرحی) and must not affect productivity reductions.
+                HasHardshipDuty = false,
+                HasUncommonRotatingShifts = userConstraint.ShiftType == ShiftTypes.RotatingShift
+            };
+
+            var weeks = CalculateWeekSpan(constraints.StartDate, constraints.EndDate);
+            var nightCap = userConstraint.MaxNightShiftsPerMonth > 0
+                ? userConstraint.MaxNightShiftsPerMonth
+                : deptSetting?.MaxNightShiftsPerMonth ?? 0;
+
+            var nightHolidayHours = nightCap > 0 && nightShiftDurationHours > 0
+                ? (decimal)(nightCap * nightShiftDurationHours)
+                : 0m;
+
+            var request = new WorkingHoursCalculationRequestDto
+            {
+                Staff = staffInfo,
+                TargetMonth = new DateTime(constraints.StartDate.Year, constraints.StartDate.Month, 1),
+                NumberOfWeeksInMonth = weeks,
+                NightHolidayHours = nightHolidayHours
+            };
+
+            try
+            {
+                return _workingHoursCalculator.CalculateMonthlyHours(request);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to calculate productivity hours for user {UserId}", user.Id);
+                return null;
+            }
+        }
+
+        private static int CalculateWeekSpan(DateTime startDate, DateTime endDate)
+        {
+            var totalDays = (endDate.Date - startDate.Date).TotalDays + 1;
+            if (totalDays <= 0)
+            {
+                return 1;
+            }
+
+            return Math.Max(1, (int)Math.Ceiling(totalDays / 7.0));
+        }
+
+        private static double CalculateShiftDurationHours(TimeSpan start, TimeSpan end)
+        {
+            var duration = (end - start).TotalHours;
+            if (duration <= 0)
+            {
+                duration += 24;
+            }
+
+            return Math.Max(1, duration);
+        }
+
+        private static string ToPersianDateString(DateTime date)
+        {
+            var calendar = new PersianCalendar();
+            return $"{calendar.GetYear(date):0000}/{calendar.GetMonth(date):00}/{calendar.GetDayOfMonth(date):00}";
+        }
+
+        private static double CalculateDefaultNightShiftDuration(IEnumerable<ShiftRequirement> requirements)
+        {
+            var nightDurations = requirements
+                .Where(r => r.ShiftLabel == ShiftLabel.Night && r.DurationHours > 0)
+                .Select(r => r.DurationHours)
+                .ToList();
+
+            if (nightDurations.Count == 0)
+            {
+                return 8;
+            }
+
+            return nightDurations.Average();
+        }
+
+        private void PopulateProductivityStatistics(ShiftSchedulingResultDto result, ShiftConstraints constraints)
+        {
+            if (result == null || constraints == null || constraints.ShiftRequirements.Count == 0)
+            {
+                return;
+            }
+
+            var shiftDurationMap = constraints.ShiftRequirements
+                .GroupBy(s => s.ShiftId)
+                .ToDictionary(g => g.Key, g => g.First().DurationHours);
+
+            var hoursByUser = result.Assignments
+                .GroupBy(a => a.UserId)
+                .ToDictionary(
+                    g => g.Key,
+                    g => g.Sum(a => shiftDurationMap.TryGetValue(a.ShiftId, out var duration) ? duration : 0));
+
+            result.Statistics ??= new ShiftSchedulingStatisticsDto();
+            result.Statistics.WorkedHoursByUser = hoursByUser;
+            result.Statistics.TotalScheduledHours = hoursByUser.Values.Sum();
+
+            var requiredByUser = constraints.UserConstraints
+                .Where(u => u.ProductivityRequiredHours.HasValue)
+                .ToDictionary(u => u.UserId, u => (double)u.ProductivityRequiredHours.Value);
+
+            result.Statistics.ProductivityRequiredHoursByUser = requiredByUser;
+
+            var overtime = new Dictionary<int, double>();
+            var compliantCount = 0;
+            const double tolerance = 0.25;
+
+            foreach (var kvp in requiredByUser)
+            {
+                var worked = hoursByUser.TryGetValue(kvp.Key, out var value) ? value : 0;
+                var delta = worked - kvp.Value;
+                if (delta > tolerance)
+                {
+                    overtime[kvp.Key] = delta;
+                }
+                else
+                {
+                    overtime[kvp.Key] = 0;
+                    compliantCount++;
+                }
+            }
+
+            result.Statistics.ProductivityOvertimeByUser = overtime;
+            if (requiredByUser.Count > 0)
+            {
+                result.Statistics.ProductivityComplianceRate = compliantCount / (double)requiredByUser.Count;
+            }
+
+            if (constraints.UserConstraints.Count > 0)
+            {
+                result.Statistics.SoftConstraintViolationRate =
+                    (double)(result.Violations?.Count ?? 0) / constraints.UserConstraints.Count;
+            }
+        }
+
+        private async Task<(int MaxTimeInSeconds, int NumSearchWorkers, bool LogSearchProgress, int MaxSolutions, double RelativeGapLimit)> GetOrToolsSettingsAsync(int departmentId)
+        {
+            try
+            {
+                var settingsResponse = await _algorithmSettingsService.GetSettingByDepartmentAndTypeAsync(departmentId, (int)SchedulingAlgorithm.OrToolsCPSat);
+                
+                if (settingsResponse.IsSuccess && settingsResponse.Data != null)
+                {
+                    var settings = settingsResponse.Data;
+                    return (
+                        settings.ORT_MaxTimeInSeconds ?? 300,
+                        settings.ORT_NumSearchWorkers ?? 4,
+                        settings.ORT_LogSearchProgress ?? true,
+                        settings.ORT_MaxSolutions ?? 1,
+                        settings.ORT_RelativeGapLimit ?? 0.01
+                    );
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "خطا در دریافت تنظیمات OR-Tools از دیتابیس، از مقادیر پیش‌فرض استفاده می‌شود");
+            }
+
+            // مقادیر پیش‌فرض
+            return (300, 4, true, 1, 0.01);
+        }
+
+        private async Task<(ShiftYar.Application.Features.ShiftModel.Hybrid.HybridStrategy Strategy, int MaxIterations, double ComplexityThreshold)> GetHybridSettingsAsync(int departmentId)
+        {
+            try
+            {
+                var settingsResponse = await _algorithmSettingsService.GetSettingByDepartmentAndTypeAsync(departmentId, (int)SchedulingAlgorithm.Hybrid);
+                
+                if (settingsResponse.IsSuccess && settingsResponse.Data != null)
+                {
+                    var settings = settingsResponse.Data;
+                    return (
+                        settings.HYB_Strategy.HasValue ? (ShiftYar.Application.Features.ShiftModel.Hybrid.HybridStrategy)settings.HYB_Strategy.Value : ShiftYar.Application.Features.ShiftModel.Hybrid.HybridStrategy.OrToolsFirst,
+                        settings.HYB_MaxIterations ?? 5,
+                        settings.HYB_ComplexityThreshold ?? 100.0
+                    );
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "خطا در دریافت تنظیمات Hybrid از دیتابیس، از مقادیر پیش‌فرض استفاده می‌شود");
+            }
+
+            // مقادیر پیش‌فرض
+            return (ShiftYar.Application.Features.ShiftModel.Hybrid.HybridStrategy.OrToolsFirst, 5, 100.0);
+        }
 
         /// <summary>
         /// بارگذاری محدودیت‌ها از دیتابیس
         /// </summary>
-        private async Task<ShiftConstraints> LoadConstraintsAsync(ShiftSchedulingRequestDto request)
+        private async Task<ShiftConstraints> LoadConstraintsAsync(ShiftSchedulingRequestDto request) // بارگذاری قیود زمان‌بندی از DB
         {
             try
             {
                 var constraints = new ShiftConstraints
                 {
                     DepartmentId = request.DepartmentId,
-                    StartDate = request.StartDate,
-                    EndDate = request.EndDate
+                    StartDate = DateConverter.ConvertToGregorianDate(request.StartDate),
+                    EndDate = DateConverter.ConvertToGregorianDate(request.EndDate)
                 };
 
                 // تنظیم قوانین قطعی/اختیاری بر اساس تنظیمات دپارتمان
@@ -297,6 +771,42 @@ namespace ShiftYar.Application.Features.ShiftModel.Services
                     }
                 }
 
+                // بارگذاری تنظیمات دپارتمان (برای Override مقادیر عددی در سطح کاربر)
+                var deptSettingEarlyResult = await _deptSettingsRepository.GetByFilterAsync(
+                    filter: new Features.DepartmentModel.Filters.DepartmentSchedulingSettingsFilter
+                    {
+                        DepartmentId = request.DepartmentId,
+                        PageNumber = 1,
+                        PageSize = 1
+                    },
+                    includes: null
+                );
+                var deptSettingEarly = deptSettingEarlyResult.Items.FirstOrDefault();
+
+                // بارگذاری تنظیمات دپارتمان برای Hard Rules
+                if (deptSettingEarly != null)
+                {
+                    // تنظیم Hard Rules بر اساس تنظیمات دپارتمان
+                    constraints.HardRules.ForbidDuplicateDailyAssignments = deptSettingEarly.ForbidDuplicateDailyAssignments ?? true;
+                    constraints.HardRules.EnforceMaxShiftsPerDay = deptSettingEarly.EnforceMaxShiftsPerDay ?? false;
+                    constraints.HardRules.EnforceMinRestDays = deptSettingEarly.EnforceMinRestDays ?? false;
+                    constraints.HardRules.EnforceMaxConsecutiveShifts = deptSettingEarly.EnforceMaxConsecutiveShifts ?? false;
+                    constraints.HardRules.EnforceWeeklyMaxShifts = deptSettingEarly.EnforceWeeklyMaxShifts ?? false;
+                    constraints.HardRules.EnforceNightShiftMonthlyCap = deptSettingEarly.EnforceNightShiftMonthlyCap ?? false;
+                    constraints.HardRules.EnforceSpecialtyCapacity = deptSettingEarly.EnforceSpecialtyCapacity ?? false;
+
+                    // تنظیم Soft Weights
+                    constraints.SoftWeights.GenderBalanceWeight = deptSettingEarly.GenderBalanceWeight ?? 1.0;
+                    constraints.SoftWeights.SpecialtyPreferenceWeight = deptSettingEarly.SpecialtyPreferenceWeight ?? 1.0;
+                    constraints.SoftWeights.UserUnwantedShiftWeight = deptSettingEarly.UserUnwantedShiftWeight ?? 1.0;
+                    constraints.SoftWeights.UserPreferredShiftWeight = deptSettingEarly.UserPreferredShiftWeight ?? 1.0;
+                    constraints.SoftWeights.WeeklyMaxWeight = deptSettingEarly.WeeklyMaxWeight ?? 1.0;
+                    constraints.SoftWeights.MonthlyNightCapWeight = deptSettingEarly.MonthlyNightCapWeight ?? 1.0;
+                    constraints.SoftWeights.FairShiftCountBalanceWeight = deptSettingEarly.FairShiftCountBalanceWeight ?? 1.0;
+                    constraints.SoftWeights.ExtraShiftRotationWeight = deptSettingEarly.ExtraShiftRotationWeight ?? 1.0;
+                    constraints.SoftWeights.ShiftLabelBalanceWeight = deptSettingEarly.ShiftLabelBalanceWeight ?? 1.0;
+                }
+
                 // بارگذاری کاربران دپارتمان
                 var users = await _userRepository.GetByFilterAsync(
                     filter: null,
@@ -317,22 +827,68 @@ namespace ShiftYar.Application.Features.ShiftModel.Services
                         SpecialtyId = user.SpecialtyId ?? 0,
                         SpecialtyName = user.Specialty?.SpecialtyName ?? "",
                         CanBeShiftManager = user.CanBeShiftManager ?? false,
+                        IsActive = user.IsActive ?? true,
                         ShiftType = user.ShiftType ?? ShiftTypes.FixedShift,
                         ShiftSubType = user.ShiftSubType ?? ShiftSubTypes.FixedMorning,
                         TwoShiftRotationPattern = user.TwoShiftRotationPattern
                     };
 
-                    // اعمال محدودیت‌های سفارشی
-                    var customConstraint = request.Constraints.FirstOrDefault(c => c.UserId == user.Id);
-                    if (customConstraint != null)
+                    // همه محدودیت‌های عددی از تنظیمات دپارتمان خوانده می‌شوند (مقادیر پیش‌فرض)
+                    userConstraint.MaxConsecutiveShifts = 3; // پیش‌فرض
+                    userConstraint.MinRestDaysBetweenShifts = 1; // پیش‌فرض
+                    userConstraint.MaxShiftsPerWeek = 5; // پیش‌فرض
+                    userConstraint.MaxNightShiftsPerMonth = 8; // پیش‌فرض
+
+                    // Override from department settings if enforcement is on
+                    if (deptSettingEarly != null)
                     {
-                        userConstraint.UnavailableDates = customConstraint.UnavailableDates;
-                        userConstraint.PreferredShifts = customConstraint.PreferredShifts;
-                        userConstraint.UnwantedShifts = customConstraint.UnwantedShifts;
-                        userConstraint.MaxConsecutiveShifts = customConstraint.MaxConsecutiveShifts;
-                        userConstraint.MinRestDaysBetweenShifts = customConstraint.MinRestDaysBetweenShifts;
-                        userConstraint.MaxShiftsPerWeek = customConstraint.MaxShiftsPerWeek;
-                        userConstraint.MaxNightShiftsPerMonth = customConstraint.MaxNightShiftsPerMonth;
+                        if (constraints.HardRules.EnforceMinRestDays && deptSettingEarly.MinRestDaysBetweenShifts.HasValue)
+                        {
+                            userConstraint.MinRestDaysBetweenShifts = Math.Max(0, deptSettingEarly.MinRestDaysBetweenShifts.Value);
+                        }
+                        if (constraints.HardRules.EnforceMaxConsecutiveShifts && deptSettingEarly.MaxConsecutiveShifts.HasValue)
+                        {
+                            userConstraint.MaxConsecutiveShifts = Math.Max(1, deptSettingEarly.MaxConsecutiveShifts.Value);
+                        }
+                        if (constraints.HardRules.EnforceWeeklyMaxShifts && deptSettingEarly.MaxShiftsPerWeek.HasValue)
+                        {
+                            userConstraint.MaxShiftsPerWeek = Math.Clamp(deptSettingEarly.MaxShiftsPerWeek.Value, 1, 7);
+                        }
+                        if (constraints.HardRules.EnforceNightShiftMonthlyCap && deptSettingEarly.MaxNightShiftsPerMonth.HasValue)
+                        {
+                            userConstraint.MaxNightShiftsPerMonth = Math.Max(0, deptSettingEarly.MaxNightShiftsPerMonth.Value);
+                        }
+                    }
+
+                    // بارگذاری درخواست‌های شیفت کاربر
+                    var userShiftRequests = await _shiftRequestRepository.GetByFilterAsync(
+                        filter: null,
+                        includes: new[] { "User" }
+                    );
+                    
+                    var userRequests = userShiftRequests.Items
+                        .Where(r => r.UserId == user.Id && 
+                                   r.Status == Domain.Enums.ShiftRequestModel.RequestStatus.Approved &&
+                                   r.RequestDate >= constraints.StartDate && 
+                                   r.RequestDate <= constraints.EndDate)
+                        .ToList();
+
+                    foreach (var shiftRequest in userRequests)
+                    {
+                        if (shiftRequest.RequestAction == Domain.Enums.ShiftRequestModel.RequestAction.RequestToBeOffShift)
+                        {
+                            if (shiftRequest.RequestDate.HasValue)
+                            {
+                                userConstraint.UnavailableDates.Add(shiftRequest.RequestDate.Value);
+                            }
+                        }
+                        else if (shiftRequest.RequestAction == Domain.Enums.ShiftRequestModel.RequestAction.RequestToBeOnShift)
+                        {
+                            if (shiftRequest.ShiftLabel.HasValue)
+                            {
+                                userConstraint.PreferredShifts.Add(shiftRequest.ShiftLabel.Value);
+                            }
+                        }
                     }
 
                     constraints.UserConstraints.Add(userConstraint);
@@ -358,6 +914,9 @@ namespace ShiftYar.Application.Features.ShiftModel.Services
                         StartTime = shift.StartTime ?? TimeSpan.Zero,
                         EndTime = shift.EndTime ?? TimeSpan.Zero
                     };
+                    var durationHours = CalculateShiftDurationHours(shiftRequirement.StartTime, shiftRequirement.EndTime);
+                    shiftRequirement.DurationHours = durationHours;
+                    shiftRequirement.DurationMinutes = (int)Math.Round(durationHours * 60);
 
                     // بارگذاری نیازمندی‌های تخصص
                     if (shift.RequiredSpecialties != null)
@@ -383,6 +942,113 @@ namespace ShiftYar.Application.Features.ShiftModel.Services
                     constraints.ShiftRequirements.Add(shiftRequirement);
                 }
 
+                var nightShiftDuration = CalculateDefaultNightShiftDuration(constraints.ShiftRequirements);
+                var userDictionary = departmentUsers
+                    .Where(u => u.Id.HasValue)
+                    .ToDictionary(u => u.Id!.Value, u => u);
+
+                foreach (var userConstraint in constraints.UserConstraints)
+                {
+                    if (userConstraint.UserId == 0 || !userConstraint.IsActive)
+                    {
+                        continue;
+                    }
+
+                    if (!userDictionary.TryGetValue(userConstraint.UserId, out var userEntity))
+                    {
+                        continue;
+                    }
+
+                    var productivitySnapshot = CalculateProductivitySnapshot(userEntity, userConstraint, constraints, deptSettingEarly, nightShiftDuration);
+                    if (productivitySnapshot != null)
+                    {
+                        userConstraint.IncludedInProductivityPlan = true;
+                        userConstraint.ProductivitySnapshot = productivitySnapshot;
+                        userConstraint.ProductivityRequiredHours = productivitySnapshot.FinalMonthlyRequiredHours;
+                    }
+                }
+
+                // اعمال درخواست‌های شیفت تأییدشده (ShiftRequest) به قیود کاربر
+                var approvedRequests = await _shiftRequestRepository.GetByFilterAsync(
+                    filter: new Features.ShiftRequestModel.Filters.ShiftRequestFilter(x =>
+                        x.Status == Domain.Enums.ShiftRequestModel.RequestStatus.Approved
+                        && x.User != null
+                        && x.User.DepartmentId == request.DepartmentId
+                        && x.RequestDate >= DateConverter.ConvertToGregorianDate(request.StartDate)
+                        && x.RequestDate <= DateConverter.ConvertToGregorianDate(request.EndDate)
+                    ),
+                    includes: new[] { "User" }
+                );
+
+                foreach (var req in approvedRequests.Items)
+                {
+                    if (req.UserId == null || req.RequestDate == null) continue;
+                    var uc = constraints.UserConstraints.FirstOrDefault(u => u.UserId == req.UserId);
+                    if (uc == null) continue;
+
+                    var date = req.RequestDate.Value.Date;
+                    var label = req.ShiftLabel ?? ShiftLabel.Morning;
+
+                    if (req.RequestAction == Domain.Enums.ShiftRequestModel.RequestAction.RequestToBeOffShift)
+                    {
+                        // کاربر این تاریخ را نمی‌خواهد سر شیفت باشد
+                        if (!uc.UnavailableDates.Contains(date)) uc.UnavailableDates.Add(date);
+                    }
+                    else if (req.RequestAction == Domain.Enums.ShiftRequestModel.RequestAction.RequestToBeOnShift)
+                    {
+                        // کاربر این شیفت را ترجیح می‌دهد (اگر FullDay است، می‌توانیم هر سه را ترجیح دهیم)
+                        if (req.RequestType == Domain.Enums.ShiftRequestModel.RequestType.FullDay)
+                        {
+                            foreach (var s in new[] { ShiftLabel.Morning, ShiftLabel.Evening, ShiftLabel.Night })
+                                if (!uc.PreferredShifts.Contains(s)) uc.PreferredShifts.Add(s);
+                        }
+                        else
+                        {
+                            if (!uc.PreferredShifts.Contains(label)) uc.PreferredShifts.Add(label);
+                        }
+                    }
+                }
+
+                // بارگذاری سابقه اخیر برای عدالت
+                try
+                {
+                    int lookbackMonths = Math.Max(1, constraints.SoftWeights.FairnessLookbackMonths);
+                    var lookbackStart = new DateTime(constraints.StartDate.Year, constraints.StartDate.Month, 1).AddMonths(-lookbackMonths);
+
+                    var (lookbackDates, _) = await _shiftDateRepository.GetByFilterAsync(
+                        new Features.CalendarSeeder.Filters.ShiftDateFilter
+                        {
+                            PersianDateStart = new System.Globalization.PersianCalendar().GetYear(lookbackStart).ToString("0000") + "/" +
+                                               new System.Globalization.PersianCalendar().GetMonth(lookbackStart).ToString("00") + "/" +
+                                               new System.Globalization.PersianCalendar().GetDayOfMonth(lookbackStart).ToString("00"),
+                            PersianDateEnd = new System.Globalization.PersianCalendar().GetYear(constraints.StartDate.AddDays(-1)).ToString("0000") + "/" +
+                                             new System.Globalization.PersianCalendar().GetMonth(constraints.StartDate.AddDays(-1)).ToString("00") + "/" +
+                                             new System.Globalization.PersianCalendar().GetDayOfMonth(constraints.StartDate.AddDays(-1)).ToString("00"),
+                            PageSize = 2000
+                        }
+                    );
+                    var lookbackDateSet = new HashSet<DateTime>(lookbackDates.Where(d => d.Date.HasValue).Select(d => d.Date.Value.Date));
+
+                    var (prevAssignments, _) = await _shiftAssignmentRepository.GetByFilterAsync(
+                        new Application.Common.Filters.SimpleFilter<ShiftAssignment>(a => a.ShiftDate != null && a.ShiftDate.Date.HasValue),
+                        "ShiftDate"
+                    );
+
+                    var prevByUser = prevAssignments
+                        .Where(a => a.UserId.HasValue && a.ShiftDate != null && a.ShiftDate.Date.HasValue && lookbackDateSet.Contains(a.ShiftDate.Date.Value.Date))
+                        .GroupBy(a => a.UserId!.Value)
+                        .ToDictionary(g => g.Key, g => g.Count());
+
+                    foreach (var uc in constraints.UserConstraints)
+                    {
+                        uc.RecentTotalShifts = prevByUser.TryGetValue(uc.UserId, out var cnt) ? cnt : 0;
+                        uc.RecentLabelCounts[ShiftLabel.Morning] = 0;
+                        uc.RecentLabelCounts[ShiftLabel.Evening] = 0;
+                        uc.RecentLabelCounts[ShiftLabel.Night] = 0;
+                    }
+                }
+                catch { }
+
                 // بارگذاری تنظیمات زمان‌بندی از جدول مخصوص
                 var settings = await _deptSettingsRepository.GetByFilterAsync(
                     filter: new Features.DepartmentModel.Filters.DepartmentSchedulingSettingsFilter
@@ -397,7 +1063,6 @@ namespace ShiftYar.Application.Features.ShiftModel.Services
                 if (deptSetting != null)
                 {
                     // Map hard rules
-                    if (deptSetting.ForbidUnavailableDates.HasValue) constraints.HardRules.ForbidUnavailableDates = deptSetting.ForbidUnavailableDates.Value;
                     if (deptSetting.ForbidDuplicateDailyAssignments.HasValue) constraints.HardRules.ForbidDuplicateDailyAssignments = deptSetting.ForbidDuplicateDailyAssignments.Value;
                     if (deptSetting.EnforceMaxShiftsPerDay.HasValue) constraints.HardRules.EnforceMaxShiftsPerDay = deptSetting.EnforceMaxShiftsPerDay.Value;
                     if (deptSetting.EnforceMinRestDays.HasValue) constraints.HardRules.EnforceMinRestDays = deptSetting.EnforceMinRestDays.Value;
@@ -406,6 +1071,16 @@ namespace ShiftYar.Application.Features.ShiftModel.Services
                     if (deptSetting.EnforceNightShiftMonthlyCap.HasValue) constraints.HardRules.EnforceNightShiftMonthlyCap = deptSetting.EnforceNightShiftMonthlyCap.Value;
                     if (deptSetting.EnforceSpecialtyCapacity.HasValue) constraints.HardRules.EnforceSpecialtyCapacity = deptSetting.EnforceSpecialtyCapacity.Value;
 
+                    // Apply department-level numeric values to global constraints if enforced
+                    if (constraints.HardRules.EnforceMaxShiftsPerDay && deptSetting.MaxShiftsPerDay.HasValue)
+                    {
+                        constraints.GlobalConstraints.MaxShiftsPerDay = Math.Max(1, deptSetting.MaxShiftsPerDay.Value);
+                    }
+                    if (deptSetting.MaxConsecutiveNightShifts.HasValue)
+                    {
+                        constraints.GlobalConstraints.MaxConsecutiveNightShifts = Math.Max(1, deptSetting.MaxConsecutiveNightShifts.Value);
+                    }
+
                     // Map soft weights
                     if (deptSetting.GenderBalanceWeight.HasValue) constraints.SoftWeights.GenderBalanceWeight = deptSetting.GenderBalanceWeight.Value;
                     if (deptSetting.SpecialtyPreferenceWeight.HasValue) constraints.SoftWeights.SpecialtyPreferenceWeight = deptSetting.SpecialtyPreferenceWeight.Value;
@@ -413,6 +1088,15 @@ namespace ShiftYar.Application.Features.ShiftModel.Services
                     if (deptSetting.UserPreferredShiftWeight.HasValue) constraints.SoftWeights.UserPreferredShiftWeight = deptSetting.UserPreferredShiftWeight.Value;
                     if (deptSetting.WeeklyMaxWeight.HasValue) constraints.SoftWeights.WeeklyMaxWeight = deptSetting.WeeklyMaxWeight.Value;
                     if (deptSetting.MonthlyNightCapWeight.HasValue) constraints.SoftWeights.MonthlyNightCapWeight = deptSetting.MonthlyNightCapWeight.Value;
+
+                    // Fairness weights
+                    if (deptSetting.FairShiftCountBalanceWeight.HasValue) constraints.SoftWeights.FairShiftCountBalanceWeight = deptSetting.FairShiftCountBalanceWeight.Value;
+                    if (deptSetting.ExtraShiftRotationWeight.HasValue) constraints.SoftWeights.ExtraShiftRotationWeight = deptSetting.ExtraShiftRotationWeight.Value;
+                    if (deptSetting.ShiftLabelBalanceWeight.HasValue) constraints.SoftWeights.ShiftLabelBalanceWeight = deptSetting.ShiftLabelBalanceWeight.Value;
+                    if (deptSetting.FairnessLookbackMonths.HasValue) constraints.SoftWeights.FairnessLookbackMonths = deptSetting.FairnessLookbackMonths.Value;
+
+                    // Night shift distribution weights
+                    if (deptSetting.NightShiftDistributionWeight.HasValue) constraints.SoftWeights.NightShiftDistributionBySeniorityWeight = deptSetting.NightShiftDistributionWeight.Value;
                 }
 
                 return constraints;
@@ -427,7 +1111,7 @@ namespace ShiftYar.Application.Features.ShiftModel.Services
         /// <summary>
         /// تبدیل راه‌حل به DTO نتیجه
         /// </summary>
-        private async Task<ShiftSchedulingResultDto> ConvertSolutionToResultAsync(ShiftSolution solution, ShiftConstraints constraints)
+        private async Task<ShiftSchedulingResultDto> ConvertSolutionToResultAsync(ShiftSolution solution, ShiftConstraints constraints) // نگاشت راه‌حل SA به DTO خروجی
         {
             var result = new ShiftSchedulingResultDto
             {
@@ -475,7 +1159,355 @@ namespace ShiftYar.Application.Features.ShiftModel.Services
                 .GroupBy(a => a.UserId)
                 .ToDictionary(g => g.Key, g => g.Count());
 
+            PopulateProductivityStatistics(result, constraints);
             return result;
+        }
+
+        /// <summary>
+        /// تبدیل محدودیت‌ها به فرمت OR-Tools
+        /// </summary>
+        private async Task<OrToolsConstraints> ConvertToOrToolsConstraintsAsync(ShiftConstraints constraints, ShiftSchedulingRequestDto request)
+        {
+            var ortoolsConstraints = new OrToolsConstraints
+            {
+                DepartmentId = constraints.DepartmentId,
+                StartDate = constraints.StartDate,
+                EndDate = constraints.EndDate,
+                GlobalConstraints = new OrToolsGlobalConstraints
+                {
+                    AllowConsecutiveNightShifts = constraints.GlobalConstraints.AllowConsecutiveNightShifts,
+                    MaxConsecutiveNightShifts = constraints.GlobalConstraints.MaxConsecutiveNightShifts,
+                    RequireGenderBalance = constraints.GlobalConstraints.RequireGenderBalance,
+                    MinGenderBalanceRatio = constraints.GlobalConstraints.MinGenderBalanceRatio,
+                    PreferSpecialtyMatch = constraints.GlobalConstraints.PreferSpecialtyMatch,
+                    MaxShiftsPerDay = constraints.GlobalConstraints.MaxShiftsPerDay,
+                    AllowWeekendShifts = constraints.GlobalConstraints.AllowWeekendShifts,
+                    RequireShiftManager = constraints.GlobalConstraints.RequireShiftManager
+                },
+                HardRules = new OrToolsHardRules
+                {
+                    ForbidDuplicateDailyAssignments = constraints.HardRules.ForbidDuplicateDailyAssignments,
+                    EnforceMaxShiftsPerDay = constraints.HardRules.EnforceMaxShiftsPerDay,
+                    EnforceMinRestDays = constraints.HardRules.EnforceMinRestDays,
+                    EnforceMaxConsecutiveShifts = constraints.HardRules.EnforceMaxConsecutiveShifts,
+                    EnforceWeeklyMaxShifts = constraints.HardRules.EnforceWeeklyMaxShifts,
+                    EnforceNightShiftMonthlyCap = constraints.HardRules.EnforceNightShiftMonthlyCap,
+                    EnforceSpecialtyCapacity = constraints.HardRules.EnforceSpecialtyCapacity,
+                    EnforceProductivityHours = constraints.HardRules.EnforceProductivityHours
+                },
+                SoftWeights = new OrToolsSoftWeights
+                {
+                    GenderBalanceWeight = constraints.SoftWeights.GenderBalanceWeight,
+                    SpecialtyPreferenceWeight = constraints.SoftWeights.SpecialtyPreferenceWeight,
+                    UserUnwantedShiftWeight = constraints.SoftWeights.UserUnwantedShiftWeight,
+                    UserPreferredShiftWeight = constraints.SoftWeights.UserPreferredShiftWeight,
+                    WeeklyMaxWeight = constraints.SoftWeights.WeeklyMaxWeight,
+                    MonthlyNightCapWeight = constraints.SoftWeights.MonthlyNightCapWeight
+                }
+            };
+
+            // تبدیل محدودیت‌های کاربران
+            for (int i = 0; i < constraints.UserConstraints.Count; i++)
+            {
+                var user = constraints.UserConstraints[i];
+                var ortoolsUser = new OrToolsUserConstraint
+                {
+                    UserId = user.UserId,
+                    UserIndex = i,
+                    UserName = user.UserName,
+                    Gender = user.Gender,
+                    GenderIndex = user.Gender == UserGender.Male ? 0 : 1,
+                    SpecialtyId = user.SpecialtyId,
+                    SpecialtyName = user.SpecialtyName,
+                    UnavailableDateIndices = user.UnavailableDates.Select(d => (int)(d - constraints.StartDate).TotalDays).ToList(),
+                    PreferredShifts = user.PreferredShifts,
+                    UnwantedShifts = user.UnwantedShifts,
+                    MaxConsecutiveShifts = user.MaxConsecutiveShifts,
+                    MinRestDaysBetweenShifts = user.MinRestDaysBetweenShifts,
+                    MaxShiftsPerWeek = user.MaxShiftsPerWeek,
+                    MaxNightShiftsPerMonth = user.MaxNightShiftsPerMonth,
+                    CanBeShiftManager = user.CanBeShiftManager,
+                    ShiftType = user.ShiftType,
+                    ShiftSubType = user.ShiftSubType,
+                    TwoShiftRotationPattern = user.TwoShiftRotationPattern,
+                    ProductivityRequiredHours = user.ProductivityRequiredHours.HasValue ? (double)user.ProductivityRequiredHours.Value : null
+                };
+
+                ortoolsConstraints.UserConstraints.Add(ortoolsUser);
+                ortoolsConstraints.UserIndexMap[user.UserId.ToString()] = i;
+            }
+
+            // تبدیل نیازمندی‌های شیفت
+            for (int i = 0; i < constraints.ShiftRequirements.Count; i++)
+            {
+                var shift = constraints.ShiftRequirements[i];
+                var ortoolsShift = new OrToolsShiftRequirement
+                {
+                    ShiftId = shift.ShiftId,
+                    ShiftIndex = i,
+                    ShiftLabel = shift.ShiftLabel,
+                    DepartmentId = shift.DepartmentId,
+                    StartTime = shift.StartTime,
+                    EndTime = shift.EndTime,
+                    DurationMinutes = shift.DurationMinutes
+                };
+
+                foreach (var specialtyReq in shift.SpecialtyRequirements)
+                {
+                    var ortoolsSpecialtyReq = new OrToolsSpecialtyRequirement
+                    {
+                        SpecialtyId = specialtyReq.SpecialtyId,
+                        SpecialtyName = specialtyReq.SpecialtyName,
+                        RequiredMaleCount = specialtyReq.RequiredMaleCount,
+                        RequiredFemaleCount = specialtyReq.RequiredFemaleCount,
+                        RequiredTotalCount = specialtyReq.RequiredTotalCount,
+                        OnCallMaleCount = specialtyReq.OnCallMaleCount,
+                        OnCallFemaleCount = specialtyReq.OnCallFemaleCount,
+                        OnCallTotalCount = specialtyReq.OnCallTotalCount
+                    };
+
+                    ortoolsShift.SpecialtyRequirements.Add(ortoolsSpecialtyReq);
+                }
+
+                ortoolsConstraints.ShiftRequirements.Add(ortoolsShift);
+                ortoolsConstraints.ShiftIndexMap[shift.ShiftId.ToString()] = i;
+            }
+
+            return ortoolsConstraints;
+        }
+
+        /// <summary>
+        /// تبدیل راه‌حل OR-Tools به DTO نتیجه
+        /// </summary>
+        private async Task<ShiftSchedulingResultDto> ConvertOrToolsSolutionToResultAsync(OrToolsShiftSolution solution, OrToolsConstraints constraints)
+        {
+            var result = new ShiftSchedulingResultDto
+            {
+                FinalScore = solution.CalculateScore(),
+                Violations = solution.Violations
+            };
+
+            // تبدیل انتساب‌ها
+            foreach (var assignment in solution.Assignments.Values)
+            {
+                var user = constraints.UserConstraints.FirstOrDefault(u => u.UserId == assignment.UserId);
+                var shift = constraints.ShiftRequirements.FirstOrDefault(s => s.ShiftId == assignment.ShiftId);
+
+                result.Assignments.Add(new ShiftAssignmentDto
+                {
+                    UserId = assignment.UserId,
+                    UserName = user?.UserName ?? "",
+                    ShiftId = assignment.ShiftId,
+                    ShiftLabel = assignment.ShiftLabel,
+                    Date = assignment.Date,
+                    IsOnCall = assignment.IsOnCall,
+                    SpecialtyId = user?.SpecialtyId ?? 0,
+                    SpecialtyName = user?.SpecialtyName ?? ""
+                });
+            }
+
+            // محاسبه آمارها
+            result.Statistics = new ShiftSchedulingStatisticsDto
+            {
+                TotalShifts = result.Assignments.Count,
+                TotalUsers = constraints.UserConstraints.Count,
+                SatisfiedConstraints = constraints.UserConstraints.Count - solution.Violations.Count,
+                ViolatedConstraints = solution.Violations.Count,
+                AverageShiftsPerUser = constraints.UserConstraints.Count > 0 ?
+                    (double)result.Assignments.Count / constraints.UserConstraints.Count : 0
+            };
+
+            // آمار شیفت‌ها بر اساس نوع
+            result.Statistics.ShiftsByType = result.Assignments
+                .GroupBy(a => a.ShiftLabel)
+                .ToDictionary(g => g.Key, g => g.Count());
+
+            // آمار شیفت‌ها بر اساس کاربر
+            result.Statistics.ShiftsByUser = result.Assignments
+                .GroupBy(a => a.UserId)
+                .ToDictionary(g => g.Key, g => g.Count());
+
+            return result;
+        }
+
+        /// <summary>
+        /// تبدیل راه‌حل ترکیبی به DTO نتیجه
+        /// </summary>
+        private async Task<ShiftSchedulingResultDto> ConvertHybridSolutionToResultAsync(HybridSolution solution, ShiftConstraints constraints)
+        {
+            var result = new ShiftSchedulingResultDto
+            {
+                AlgorithmUsed = SchedulingAlgorithm.Hybrid
+            };
+
+            // تبدیل راه‌حل نهایی
+            if (solution.FinalSolution is OrToolsShiftSolution ortoolsSolution)
+            {
+                var ortoolsConstraints = await ConvertToOrToolsConstraintsAsync(constraints, new ShiftSchedulingRequestDto());
+                result = await ConvertOrToolsSolutionToResultAsync(ortoolsSolution, ortoolsConstraints);
+            }
+            else if (solution.FinalSolution is ShiftSolution saSolution)
+            {
+                result = await ConvertSolutionToResultAsync(saSolution, constraints);
+            }
+
+            // اضافه کردن اطلاعات ترکیبی
+            result.HybridResult = new HybridResultDto
+            {
+                StrategyUsed = solution.StrategyUsed,
+                TotalExecutionTime = solution.TotalExecutionTime,
+                Phase1ExecutionTime = solution.Phase1ExecutionTime,
+                Phase2ExecutionTime = solution.Phase2ExecutionTime,
+                ParallelExecutionTime = solution.ParallelExecutionTime,
+                IterativeExecutionTime = solution.IterativeExecutionTime,
+                FallbackExecutionTime = solution.FallbackExecutionTime,
+                Errors = solution.Errors
+            };
+
+            return result;
+        }
+
+
+
+        #endregion
+
+        #region Internal Methods (for Persian date conversion)
+
+        /// <summary>
+        /// بارگذاری محدودیت‌ها از دیتابیس (نسخه داخلی)
+        /// </summary>
+        private async Task<ShiftConstraints> LoadConstraintsInternalAsync(ShiftSchedulingRequestInternalDto request)
+        {
+            var dto = new ShiftSchedulingRequestDto
+            {
+                DepartmentId = request.DepartmentId,
+                StartDate = ToPersianDateString(request.StartDate),
+                EndDate = ToPersianDateString(request.EndDate),
+                Algorithm = request.Algorithm
+            };
+
+            return await LoadConstraintsAsync(dto);
+        }
+
+        /// <summary>
+        /// بهینه‌سازی با الگوریتم Simulated Annealing (نسخه داخلی)
+        /// </summary>
+        private async Task<ShiftSchedulingResultDto> OptimizeWithSimulatedAnnealingInternalAsync(ShiftSchedulingRequestInternalDto request, ShiftConstraints constraints)
+        {
+            var saParamsFromDb = await GetAlgorithmSettingsAsync(request.DepartmentId, SchedulingAlgorithm.SimulatedAnnealing);
+            var parameters = new SimulatedAnnealingParameters
+            {
+                InitialTemperature = saParamsFromDb.InitialTemperature,
+                FinalTemperature = saParamsFromDb.FinalTemperature,
+                CoolingRate = saParamsFromDb.CoolingRate,
+                MaxIterations = saParamsFromDb.MaxIterations,
+                MaxIterationsWithoutImprovement = saParamsFromDb.MaxIterationsWithoutImprovement
+            };
+
+            var scheduler = new SimulatedAnnealingScheduler(constraints, parameters);
+            var solution = scheduler.Optimize();
+            var statistics = scheduler.GetStatistics();
+
+            var result = await ConvertSolutionToResultAsync(solution, constraints);
+            result.AlgorithmUsed = SchedulingAlgorithm.SimulatedAnnealing;
+            result.AlgorithmStatus = "Completed";
+            result.TotalIterations = statistics.TotalIterations;
+            result.ExecutionTime = statistics.ExecutionTime;
+
+            return result;
+        }
+
+        /// <summary>
+        /// بهینه‌سازی با الگوریتم OR-Tools CP-SAT (نسخه داخلی)
+        /// </summary>
+        private async Task<ShiftSchedulingResultDto> OptimizeWithOrToolsInternalAsync(ShiftSchedulingRequestInternalDto request, ShiftConstraints constraints)
+        {
+            // تبدیل محدودیت‌ها به فرمت OR-Tools
+            var ortoolsConstraints = await ConvertToOrToolsConstraintsInternalAsync(constraints, request);
+
+            var ortParamsFromDb = await GetOrToolsSettingsAsync(request.DepartmentId);
+            var parameters = new OrToolsParameters
+            {
+                MaxTimeInSeconds = ortParamsFromDb.MaxTimeInSeconds,
+                NumSearchWorkers = ortParamsFromDb.NumSearchWorkers,
+                LogSearchProgress = ortParamsFromDb.LogSearchProgress,
+                MaxSolutions = ortParamsFromDb.MaxSolutions,
+                RelativeGapLimit = ortParamsFromDb.RelativeGapLimit
+            };
+
+            var scheduler = new OrToolsCPSatScheduler(ortoolsConstraints, parameters);
+            var solution = scheduler.Optimize();
+            var statistics = scheduler.GetStatistics();
+
+            var result = await ConvertOrToolsSolutionToResultAsync(solution, ortoolsConstraints);
+            result.AlgorithmUsed = SchedulingAlgorithm.OrToolsCPSat;
+            result.AlgorithmStatus = solution.Status.ToString();
+            result.ExecutionTime = solution.SolveTime;
+
+            return result;
+        }
+
+        /// <summary>
+        /// بهینه‌سازی با الگوریتم ترکیبی (نسخه داخلی)
+        /// </summary>
+        private async Task<ShiftSchedulingResultDto> OptimizeWithHybridInternalAsync(ShiftSchedulingRequestInternalDto request, ShiftConstraints constraints)
+        {
+            // تبدیل محدودیت‌ها به فرمت OR-Tools
+            var ortoolsConstraints = await ConvertToOrToolsConstraintsInternalAsync(constraints, request);
+
+            var saParamsFromDb = await GetAlgorithmSettingsAsync(request.DepartmentId, SchedulingAlgorithm.SimulatedAnnealing);
+            var saParameters = new SimulatedAnnealingParameters
+            {
+                InitialTemperature = saParamsFromDb.InitialTemperature,
+                FinalTemperature = saParamsFromDb.FinalTemperature,
+                CoolingRate = saParamsFromDb.CoolingRate,
+                MaxIterations = saParamsFromDb.MaxIterations,
+                MaxIterationsWithoutImprovement = saParamsFromDb.MaxIterationsWithoutImprovement
+            };
+
+            var ortParamsFromDb = await GetOrToolsSettingsAsync(request.DepartmentId);
+            var ortoolsParameters = new OrToolsParameters
+            {
+                MaxTimeInSeconds = ortParamsFromDb.MaxTimeInSeconds,
+                NumSearchWorkers = ortParamsFromDb.NumSearchWorkers,
+                LogSearchProgress = ortParamsFromDb.LogSearchProgress,
+                MaxSolutions = ortParamsFromDb.MaxSolutions,
+                RelativeGapLimit = ortParamsFromDb.RelativeGapLimit
+            };
+
+            var hyParamsFromDb = await GetHybridSettingsAsync(request.DepartmentId);
+            var hybridParameters = new HybridParameters
+            {
+                Strategy = hyParamsFromDb.Strategy,
+                MaxIterations = hyParamsFromDb.MaxIterations,
+                ComplexityThreshold = hyParamsFromDb.ComplexityThreshold
+            };
+
+            var scheduler = new HybridScheduler(constraints, ortoolsConstraints, saParameters, ortoolsParameters, hybridParameters);
+            var solution = scheduler.Optimize();
+            var statistics = scheduler.GetStatistics();
+
+            var result = await ConvertHybridSolutionToResultAsync(solution, constraints);
+            result.AlgorithmUsed = SchedulingAlgorithm.Hybrid;
+            result.AlgorithmStatus = "Completed";
+
+            return result;
+        }
+
+        /// <summary>
+        /// تبدیل محدودیت‌ها به فرمت OR-Tools (نسخه داخلی)
+        /// </summary>
+        private async Task<OrToolsConstraints> ConvertToOrToolsConstraintsInternalAsync(ShiftConstraints constraints, ShiftSchedulingRequestInternalDto request)
+        {
+            var dto = new ShiftSchedulingRequestDto
+            {
+                DepartmentId = request.DepartmentId,
+                StartDate = ToPersianDateString(request.StartDate),
+                EndDate = ToPersianDateString(request.EndDate),
+                Algorithm = request.Algorithm
+            };
+
+            return await ConvertToOrToolsConstraintsAsync(constraints, dto);
         }
 
         #endregion

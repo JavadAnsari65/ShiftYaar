@@ -21,6 +21,14 @@ namespace ShiftYar.Application.Interfaces.ShiftModel
         Task<ApiResponse<ShiftSchedulingResultDto>> OptimizeShiftScheduleAsync(ShiftSchedulingRequestDto request);
 
         /// <summary>
+        /// اجرای الگوریتم بهینه‌سازی شیفت‌بندی (نسخه داخلی با تاریخ میلادی)
+        /// </summary>
+        /// <param name="request">درخواست بهینه‌سازی</param>
+        /// <returns>نتیجه بهینه‌سازی</returns>
+        Task<ApiResponse<ShiftSchedulingResultDto>> OptimizeShiftScheduleInternalAsync(ShiftSchedulingRequestInternalDto request);
+
+
+        /// <summary>
         /// دریافت آمارهای الگوریتم
         /// </summary>
         /// <param name="request">درخواست بهینه‌سازی</param>

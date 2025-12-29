@@ -2,6 +2,7 @@
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
 using ShiftYar.Application.Common.Models.ResponseModel;
+using ShiftYar.Application.Common.Utilities;
 using ShiftYar.Application.DTOs.UserModel;
 using ShiftYar.Application.Features.UserModel.Filters;
 using ShiftYar.Application.Interfaces.FileUploaderInterface;
@@ -11,6 +12,7 @@ using ShiftYar.Application.Interfaces.Security;
 using ShiftYar.Application.Interfaces.UserModel;
 using ShiftYar.Domain.Entities.DepartmentModel;
 using ShiftYar.Domain.Entities.UserModel;
+using System.ComponentModel;
 using System.Security.Claims;
 
 namespace ShiftYar.Application.Features.UserModel.Services
@@ -129,6 +131,11 @@ namespace ShiftYar.Application.Features.UserModel.Services
                 }
 
                 var user = _mapper.Map<User>(dto);
+                // تبدیل تاریخ استخدام از شمسی به میلادی
+                if (!string.IsNullOrWhiteSpace(dto.DateOfEmployment))
+                {
+                    user.DateOfEmployment = DateConverter.ConvertToGregorianDate(dto.DateOfEmployment);
+                }
 
                 // ست کردن پسورد در صورت وجود
                 if (!string.IsNullOrWhiteSpace(dto.Password))
@@ -310,6 +317,12 @@ namespace ShiftYar.Application.Features.UserModel.Services
                             }
                         }
                     }
+                }
+
+                // تبدیل تاریخ استخدام از شمسی به میلادی
+                if (!string.IsNullOrWhiteSpace(dto.DateOfEmployment))
+                {
+                    user.DateOfEmployment = DateConverter.ConvertToGregorianDate(dto.DateOfEmployment);
                 }
 
                 // Update other user properties

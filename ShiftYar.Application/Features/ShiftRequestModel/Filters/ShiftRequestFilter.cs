@@ -1,4 +1,5 @@
 ﻿using ShiftYar.Application.Common.Filters;
+using ShiftYar.Application.Common.Utilities;
 using ShiftYar.Domain.Entities.ShiftDateModel;
 using ShiftYar.Domain.Entities.ShiftRequestModel;
 using ShiftYar.Domain.Enums.ShiftRequestModel;
@@ -66,7 +67,7 @@ namespace ShiftYar.Application.Features.ShiftRequestModel.Filters
 
             if (!string.IsNullOrEmpty(FromPersianDate))
             {
-                DateTime gregorianFromDate = ConvertToGregorianDate(FromPersianDate);
+                DateTime gregorianFromDate = DateConverter.ConvertToGregorianDate(FromPersianDate);
 
                 Expression<Func<ShiftRequest, bool>> fromDateExpr = ShiftRequest => ShiftRequest.RequestDate >= gregorianFromDate;
                 expression = CombineExpressions(expression, fromDateExpr);
@@ -74,7 +75,7 @@ namespace ShiftYar.Application.Features.ShiftRequestModel.Filters
 
             if (!string.IsNullOrEmpty(ToPersianDate))
             {
-                DateTime gregorianToDate = ConvertToGregorianDate(ToPersianDate);
+                DateTime gregorianToDate = DateConverter.ConvertToGregorianDate(ToPersianDate);
 
                 Expression<Func<ShiftRequest, bool>> toDateExpr = ShiftRequest => ShiftRequest.RequestDate <= gregorianToDate;
                 expression = CombineExpressions(expression, toDateExpr);
@@ -87,25 +88,6 @@ namespace ShiftYar.Application.Features.ShiftRequestModel.Filters
             }
 
             return expression;
-        }
-
-
-        private DateTime ConvertToGregorianDate(string persianDate)
-        {
-            if (string.IsNullOrWhiteSpace(persianDate))
-                throw new ArgumentException("تاریخ وارد شده نامعتبر است");
-
-            // رشته تاریخ را به بخش‌های سال، ماه و روز تقسیم می‌کنیم
-            var parts = persianDate.Split('/');
-            if (parts.Length != 3)
-                throw new FormatException("فرمت تاریخ وارد شده صحیح نیست");
-
-            int year = int.Parse(parts[0]);
-            int month = int.Parse(parts[1]);
-            int day = int.Parse(parts[2]);
-
-            var persianCalendar = new PersianCalendar();
-            return persianCalendar.ToDateTime(year, month, day, 0, 0, 0, 0);
         }
     }
 }

@@ -9,6 +9,7 @@ using ShiftYar.Domain.Entities.SecurityModel;
 using ShiftYar.Domain.Entities.ShiftDateModel;
 using ShiftYar.Domain.Entities.ShiftModel;
 using ShiftYar.Domain.Entities.ShiftRequestModel;
+using ShiftYar.Domain.Entities.ShiftExchangeModel;
 using ShiftYar.Domain.Entities.SmsModel;
 using ShiftYar.Domain.Entities.UserModel;
 using System;
@@ -48,6 +49,7 @@ namespace ShiftYar.Infrastructure.Persistence.AppDbContext
         public DbSet<ShiftRequiredSpecialty> ShiftRequiredSpecialties { get; set; }
         public DbSet<ShiftAssignment> ShiftAssignments { get; set; }
         public DbSet<ShiftRequest> ShiftRequests { get; set; }
+        public DbSet<ShiftExchange> ShiftExchanges { get; set; }
 
         public DbSet<ShiftDate> ShiftDates { get; set; }
 

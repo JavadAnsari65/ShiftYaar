@@ -46,5 +46,13 @@ namespace ShiftYar.Domain.Enums.ShiftModel
             Cancelled = 0,   // لغو شده
             Completed = 0    // انجام شده
         }
+
+        // انواع تنظیمات شب‌دوست/شب‌گریز
+        public enum NightShiftPreferenceType
+        {
+            NightFriendly = 0,  // شب‌دوست - باقیمانده شیفت‌های شب به پرسنل با سابقه بیشتر
+            NightAvoiding = 1,   // شب‌گریز - باقیمانده شیفت‌های شب به پرسنل با سابقه کمتر
+            Neutral = 2          // خنثی - بدون ترجیح خاص
+        }
     }
 }

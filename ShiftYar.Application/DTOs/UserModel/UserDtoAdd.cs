@@ -26,7 +26,7 @@ namespace ShiftYar.Application.DTOs.UserModel
         public string? NationalCode { get; set; }
         public string? PersonnelCode { get; set; }
         public UserGender? Gender { get; set; }
-        public DateTime? DateOfEmployment { get; set; }
+        public string? DateOfEmployment { get; set; } // تاریخ استخدام (شمسی)
         public bool? IsProjectPersonnel { get; set; }
 
         [EmailAddress(ErrorMessage = "ایمیل نامعتبر است.")]

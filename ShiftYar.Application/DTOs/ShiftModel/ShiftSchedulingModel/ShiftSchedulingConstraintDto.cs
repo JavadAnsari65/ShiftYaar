@@ -13,7 +13,10 @@ namespace ShiftYar.Application.DTOs.ShiftModel.ShiftSchedulingModel
     public class ShiftSchedulingConstraintDto
     {
         public int UserId { get; set; }
-        public List<DateTime> UnavailableDates { get; set; } = new List<DateTime>();
+
+        //public List<DateTime> UnavailableDates { get; set; } = new List<DateTime>();
+        public List<string> UnavailableDates { get; set; } = new List<string>(); // تاریخ‌های عدم حضور (شمسی)
+
         public List<ShiftLabel> PreferredShifts { get; set; } = new List<ShiftLabel>();
         public List<ShiftLabel> UnwantedShifts { get; set; } = new List<ShiftLabel>();
         public int MaxConsecutiveShifts { get; set; } = 3;

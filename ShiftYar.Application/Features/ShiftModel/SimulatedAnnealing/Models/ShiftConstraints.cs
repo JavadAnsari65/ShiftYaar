@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using ShiftYar.Application.DTOs.ProductivityModel;
 using static ShiftYar.Domain.Enums.ShiftModel.ShiftEnums;
 using static ShiftYar.Domain.Enums.UserModel.UserEnums;
 
@@ -43,9 +44,29 @@ namespace ShiftYar.Application.Features.ShiftModel.SimulatedAnnealing.Models
         public int MaxShiftsPerWeek { get; set; } = 5;   //حداکثر شیفت در هر هفته
         public int MaxNightShiftsPerMonth { get; set; } = 8;    //حداکثر شیفت شب در ماه
         public bool CanBeShiftManager { get; set; }
+        public bool IsActive { get; set; } = true; // وضعیت فعال بودن کاربر
         public ShiftTypes ShiftType { get; set; }
         public ShiftSubTypes ShiftSubType { get; set; }
         public TwoShiftRotationPattern? TwoShiftRotationPattern { get; set; }
+        public bool IncludedInProductivityPlan { get; set; }
+        public decimal? ProductivityRequiredHours { get; set; }
+        public WorkingHoursCalculationResultDto? ProductivitySnapshot { get; set; }
+
+        // Fairness history (computed from previous months)
+        public int RecentTotalShifts { get; set; } = 0;
+        public Dictionary<ShiftLabel, int> RecentLabelCounts { get; set; } = new Dictionary<ShiftLabel, int>();
+
+        // حداقل شیفت‌های مورد نیاز برای هر نوع شیفت (از تنظیمات دپارتمان)
+        public Dictionary<ShiftLabel, int> MinimumShiftsRequired { get; set; } = new Dictionary<ShiftLabel, int>();
+
+        // حداکثر شیفت‌های مجاز برای هر نوع شیفت (از تنظیمات دپارتمان)
+        public Dictionary<ShiftLabel, int> MaxShiftsPerMonth { get; set; } = new Dictionary<ShiftLabel, int>();
+
+        // سال‌های تجربه کاربر (برای محاسبه وزن‌های مربوط به سابقه)
+        public int ExperienceYears { get; set; } = 0;
+
+        // تاریخ استخدام کاربر (برای محاسبه تجربه)
+        public DateTime? DateOfEmployment { get; set; }
     }
 
     /// <summary>
@@ -58,6 +79,8 @@ namespace ShiftYar.Application.Features.ShiftModel.SimulatedAnnealing.Models
         public int DepartmentId { get; set; }
         public TimeSpan StartTime { get; set; }
         public TimeSpan EndTime { get; set; }
+        public double DurationHours { get; set; }
+        public int DurationMinutes { get; set; }
         public List<SpecialtyRequirement> SpecialtyRequirements { get; set; } = new List<SpecialtyRequirement>();
     }
 
@@ -97,7 +120,6 @@ namespace ShiftYar.Application.Features.ShiftModel.SimulatedAnnealing.Models
 	/// </summary>
 	public class HardRuleSet
     {
-        public bool ForbidUnavailableDates { get; set; } = true; // عدم انتساب در تاریخ‌های غیرقابل دسترس
         public bool ForbidDuplicateDailyAssignments { get; set; } = true; // هر کاربر حداکثر یک شیفت در روز
         public bool EnforceMaxShiftsPerDay { get; set; } = true; // از GlobalConstraints.MaxShiftsPerDay
         public bool EnforceMinRestDays { get; set; } = true; // حداقل فاصله استراحت
@@ -105,6 +127,7 @@ namespace ShiftYar.Application.Features.ShiftModel.SimulatedAnnealing.Models
         public bool EnforceWeeklyMaxShifts { get; set; } = false; // می‌تواند نرم نیز باشد
         public bool EnforceNightShiftMonthlyCap { get; set; } = false; // می‌تواند نرم نیز باشد
         public bool EnforceSpecialtyCapacity { get; set; } = true; // عدم تجاوز از ظرفیت موردنیاز هر تخصص/شیفت/روز
+        public bool EnforceProductivityHours { get; set; } = true; // رعایت سقف ساعات موظفی بهره‌وری
 
         public static HardRuleSet CreateDefault()
         {
@@ -123,6 +146,16 @@ namespace ShiftYar.Application.Features.ShiftModel.SimulatedAnnealing.Models
         public double UserPreferredShiftWeight { get; set; } = 1.0; // به عنوان پاداش منفی استفاده می‌شود
         public double WeeklyMaxWeight { get; set; } = 1.0;
         public double MonthlyNightCapWeight { get; set; } = 1.0;
+
+        // Fairness weights
+        public double FairShiftCountBalanceWeight { get; set; } = 0.0; // تعادل تعداد شیفت بین افراد در این ماه
+        public double ExtraShiftRotationWeight { get; set; } = 0.0;     // جلوگیری از دادن شیفت اضافه به کسانی که اخیراً زیاد گرفته‌اند
+        public double ShiftLabelBalanceWeight { get; set; } = 0.0;      // تعادل Morning/Evening/Night برای کاربران گردشی
+        public int FairnessLookbackMonths { get; set; } = 1;            // بازه سابقه برای محاسبات عدالت
+
+        // Night shift distribution weights
+        public double NightShiftDistributionBySeniorityWeight { get; set; } = 0.0; // وزن توزیع شیفت‌های شب بر اساس سابقه
+        public double ProductivityOvertimeWeight { get; set; } = 2.0; // وزن جریمه مازاد ساعات موظفی
 
         public static SoftRuleWeights CreateDefault()
         {

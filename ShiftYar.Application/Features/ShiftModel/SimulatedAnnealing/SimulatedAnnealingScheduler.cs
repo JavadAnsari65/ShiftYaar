@@ -19,6 +19,7 @@ namespace ShiftYar.Application.Features.ShiftModel.SimulatedAnnealing
         private readonly ShiftConstraints _constraints;
         private readonly SimulatedAnnealingParameters _parameters;
         private readonly AlgorithmStatistics _statistics;
+        private readonly Dictionary<int, double> _shiftDurationLookup;
 
         public SimulatedAnnealingScheduler(ShiftConstraints constraints, SimulatedAnnealingParameters parameters)
         {
@@ -26,6 +27,11 @@ namespace ShiftYar.Application.Features.ShiftModel.SimulatedAnnealing
             _parameters = parameters;
             _random = new Random();
             _statistics = new AlgorithmStatistics();
+            _shiftDurationLookup = constraints.ShiftRequirements
+                .GroupBy(s => s.ShiftId)
+                .ToDictionary(
+                    g => g.Key,
+                    g => g.First().DurationHours > 0 ? g.First().DurationHours : 8);
         }
 
         /// <summary>
@@ -138,6 +144,111 @@ namespace ShiftYar.Application.Features.ShiftModel.SimulatedAnnealing
             return bestSolution;
         }
 
+
+        /// <summary>
+        /// اجرای الگوریتم Simulated Annealing با راه‌حل اولیه مشخص
+        /// </summary>
+        public ShiftSolution OptimizeWithInitialSolution(ShiftSolution initialSolution)
+        {
+            var stopwatch = Stopwatch.StartNew();
+
+            var currentSolution = initialSolution.Clone();
+            var bestSolution = currentSolution.Clone();
+
+            _statistics.BestScore = currentSolution.Score;
+            _statistics.CurrentScore = currentSolution.Score;
+
+            double temperature = _parameters.InitialTemperature;
+            int iterationsWithoutImprovement = 0;
+
+            for (int iteration = 0; iteration < _parameters.MaxIterations; iteration++)
+            {
+                _statistics.TotalIterations = iteration + 1;
+                _statistics.CurrentTemperature = temperature;
+
+                // تولید راه‌حل همسایه
+                var neighborSolution = GenerateNeighbor(currentSolution);
+                if (!IsFeasible(neighborSolution))
+                {
+                    _statistics.RejectedMoves++;
+                    iterationsWithoutImprovement++;
+                    temperature *= _parameters.CoolingRate;
+                    _statistics.CurrentScore = currentSolution.Score;
+                    _statistics.ScoreHistory.Add(currentSolution.Score);
+                    _statistics.TemperatureHistory.Add(temperature);
+                    if (iterationsWithoutImprovement >= _parameters.MaxIterationsWithoutImprovement || temperature <= _parameters.FinalTemperature)
+                    {
+                        break;
+                    }
+                    continue;
+                }
+
+                // محاسبه تفاوت امتیاز
+                double deltaScore = neighborSolution.Score - currentSolution.Score;
+
+                // تصمیم‌گیری برای پذیرش یا رد راه‌حل جدید
+                bool acceptMove = false;
+
+                if (deltaScore < 0) // راه‌حل بهتر
+                {
+                    acceptMove = true;
+                }
+                else // راه‌حل بدتر - احتمال پذیرش بر اساس دما
+                {
+                    double acceptanceProbability = Math.Exp(-deltaScore / temperature);
+                    acceptMove = _random.NextDouble() < acceptanceProbability;
+                }
+
+                if (acceptMove)
+                {
+                    currentSolution = neighborSolution;
+                    _statistics.AcceptedMoves++;
+
+                    // بررسی بهترین راه‌حل
+                    if (currentSolution.Score < bestSolution.Score)
+                    {
+                        bestSolution = currentSolution.Clone();
+                        _statistics.BestScore = bestSolution.Score;
+                        iterationsWithoutImprovement = 0;
+                    }
+                    else
+                    {
+                        iterationsWithoutImprovement++;
+                    }
+                }
+                else
+                {
+                    _statistics.RejectedMoves++;
+                    iterationsWithoutImprovement++;
+                }
+
+                _statistics.CurrentScore = currentSolution.Score;
+                _statistics.ScoreHistory.Add(currentSolution.Score);
+                _statistics.TemperatureHistory.Add(temperature);
+
+                // کاهش دما
+                temperature *= _parameters.CoolingRate;
+
+                // توقف زودهنگام در صورت عدم بهبود
+                if (iterationsWithoutImprovement >= _parameters.MaxIterationsWithoutImprovement)
+                {
+                    break;
+                }
+
+                // توقف در صورت رسیدن به دمای نهایی
+                if (temperature <= _parameters.FinalTemperature)
+                {
+                    break;
+                }
+            }
+
+            stopwatch.Stop();
+            _statistics.ExecutionTime = stopwatch.Elapsed;
+
+            return bestSolution;
+        }
+
+
         /// <summary>
         /// تولید راه‌حل اولیه
         /// </summary>
@@ -158,6 +269,7 @@ namespace ShiftYar.Application.Features.ShiftModel.SimulatedAnnealing
                         var eligibleUsers = availableUsers
                             .Where(u => u.SpecialtyId == specialtyReq.SpecialtyId)
                             .Where(u => !u.UnavailableDates.Contains(date.Date))
+                            .Where(u => u.IsActive) // فقط کاربران فعال
                             .ToList();
 
                         // انتساب نیروهای مورد نیاز
@@ -227,6 +339,11 @@ namespace ShiftYar.Application.Features.ShiftModel.SimulatedAnnealing
             // جریمه برای ترجیحات کاربران
             score += CalculateUserPreferencePenalty(solution);
 
+            // جریمه‌های عدالت و چرخش
+            score += CalculateFairShiftCountBalancePenalty(solution) * _constraints.SoftWeights.FairShiftCountBalanceWeight;
+            score += CalculateExtraShiftRotationPenalty(solution) * _constraints.SoftWeights.ExtraShiftRotationWeight;
+            score += CalculateShiftLabelBalancePenalty(solution) * _constraints.SoftWeights.ShiftLabelBalanceWeight;
+
             solution.Violations = violations;
 
             return score;
@@ -239,6 +356,55 @@ namespace ShiftYar.Application.Features.ShiftModel.SimulatedAnnealing
         {
             // امتیاز منفی برای هر انتساب (هر چه کمتر، بهتر)
             return -solution.Assignments.Count * 10;
+        }
+
+        private double CalculateFairShiftCountBalancePenalty(ShiftSolution solution)
+        {
+            // اختلاف تعداد شیفت‌های این ماه نسبت به میانگین دپارتمان
+            var counts = _constraints.UserConstraints.Select(u => (UserId: u.UserId, Count: solution.GetUserAllAssignments(u.UserId).Count)).ToList();
+            if (counts.Count == 0) return 0;
+            double avg = counts.Average(c => c.Count);
+            double sumAbs = counts.Sum(c => Math.Abs(c.Count - avg));
+            return sumAbs; // وزن بیرونی اعمال می‌شود
+        }
+
+        private double CalculateExtraShiftRotationPenalty(ShiftSolution solution)
+        {
+            // اگر کاربری در سابقه اخیر شیفت اضافه بیشتری داشته، دادن شیفت اضافه به او جریمه شود
+            // تعریف ساده: "شیفت اضافه" = بالاتر از میانگین همین ماه
+            var counts = _constraints.UserConstraints.Select(u => (User: u, Count: solution.GetUserAllAssignments(u.UserId).Count)).ToList();
+            if (counts.Count == 0) return 0;
+            double avg = counts.Average(c => c.Count);
+
+            double penalty = 0;
+            foreach (var (user, count) in counts)
+            {
+                bool isExtraThisMonth = count > avg + 0.5; // آستانه‌ی ساده
+                if (!isExtraThisMonth) continue;
+
+                // اگر در گذشته هم زیاد گرفته است، جریمه بیشتر
+                int recent = user.RecentTotalShifts;
+                penalty += Math.Max(0, recent - (int)avg);
+            }
+            return penalty;
+        }
+
+        private double CalculateShiftLabelBalancePenalty(ShiftSolution solution)
+        {
+            // برای کاربران گردشی، اختلاف توزیع Morning/Evening/Night از توزیع عادلانه جریمه شود
+            double penalty = 0;
+            foreach (var u in _constraints.UserConstraints)
+            {
+                if (u.ShiftType != ShiftTypes.RotatingShift) continue;
+                var ua = solution.GetUserAllAssignments(u.UserId);
+                if (ua.Count == 0) continue;
+                double fair = ua.Count / 3.0;
+                int m = ua.Count(x => x.ShiftLabel == ShiftLabel.Morning);
+                int e = ua.Count(x => x.ShiftLabel == ShiftLabel.Evening);
+                int n = ua.Count(x => x.ShiftLabel == ShiftLabel.Night);
+                penalty += Math.Abs(m - fair) + Math.Abs(e - fair) + Math.Abs(n - fair);
+            }
+            return penalty;
         }
 
         /// <summary>
@@ -275,6 +441,11 @@ namespace ShiftYar.Application.Features.ShiftModel.SimulatedAnnealing
                 if (!_constraints.HardRules.EnforceNightShiftMonthlyCap)
                 {
                     penalty += CheckMonthlyNightShifts(userAssignments, userConstraint.MaxNightShiftsPerMonth, violations) * _constraints.SoftWeights.MonthlyNightCapWeight;
+                }
+
+                if (!_constraints.HardRules.EnforceProductivityHours && userConstraint.ProductivityRequiredHours.HasValue)
+                {
+                    penalty += CheckMonthlyWorkingHours(userConstraint, userAssignments, violations) * _constraints.SoftWeights.ProductivityOvertimeWeight;
                 }
             }
 
@@ -387,17 +558,23 @@ namespace ShiftYar.Application.Features.ShiftModel.SimulatedAnnealing
         /// </summary>
         private bool IsFeasible(ShiftSolution solution)
         {
-            // عدم انتساب در تاریخ‌های غیرقابل دسترس و یک شیفت در روز
-            if (_constraints.HardRules.ForbidUnavailableDates || _constraints.HardRules.ForbidDuplicateDailyAssignments || _constraints.HardRules.EnforceMaxShiftsPerDay)
+            // بررسی تاریخ‌های غیرقابل دسترس کاربران
+            foreach (var assignment in solution.Assignments.Values)
+            {
+                var userConstraint = _constraints.UserConstraints.FirstOrDefault(u => u.UserId == assignment.UserId);
+                if (userConstraint != null && userConstraint.UnavailableDates.Contains(assignment.Date.Date))
+                {
+                    return false; // کاربر در تاریخ غیرقابل دسترس انتساب شده
+                }
+            }
+
+            // یک شیفت در روز و حداکثر شیفت روزانه
+            if (_constraints.HardRules.ForbidDuplicateDailyAssignments || _constraints.HardRules.EnforceMaxShiftsPerDay)
             {
                 var byUserDate = solution.Assignments.Values
                     .GroupBy(a => new { a.UserId, Date = a.Date.Date });
                 foreach (var grp in byUserDate)
                 {
-                    var user = _constraints.UserConstraints.FirstOrDefault(u => u.UserId == grp.Key.UserId);
-                    if (user == null) continue;
-                    if (_constraints.HardRules.ForbidUnavailableDates && user.UnavailableDates.Contains(grp.Key.Date))
-                        return false;
                     if (_constraints.HardRules.ForbidDuplicateDailyAssignments && grp.Count() > 1)
                         return false;
                     if (_constraints.HardRules.EnforceMaxShiftsPerDay && grp.Count() > _constraints.GlobalConstraints.MaxShiftsPerDay)
@@ -433,6 +610,15 @@ namespace ShiftYar.Application.Features.ShiftModel.SimulatedAnnealing
                         {
                             consecutive = 1;
                         }
+                    }
+                }
+
+                if (_constraints.HardRules.EnforceProductivityHours && userConstraint.ProductivityRequiredHours.HasValue)
+                {
+                    var workedHours = CalculateUserWorkedHours(userAssignments);
+                    if (workedHours > (double)userConstraint.ProductivityRequiredHours.Value + 0.25)
+                    {
+                        return false;
                     }
                 }
             }
@@ -500,6 +686,44 @@ namespace ShiftYar.Application.Features.ShiftModel.SimulatedAnnealing
                     assignedCount++;
                 }
             }
+        }
+
+        private double CheckMonthlyWorkingHours(UserConstraint userConstraint, List<SaShiftAssignment> assignments, List<string> violations)
+        {
+            if (!userConstraint.ProductivityRequiredHours.HasValue)
+            {
+                return 0;
+            }
+
+            var workedHours = CalculateUserWorkedHours(assignments);
+            var maxHours = (double)userConstraint.ProductivityRequiredHours.Value;
+            if (workedHours <= maxHours + 0.25)
+            {
+                return 0;
+            }
+
+            violations.Add($"User {userConstraint.UserId} exceeds productivity hours ({workedHours:F1}/{maxHours:F1}).");
+            return workedHours - maxHours;
+        }
+
+        private double CalculateUserWorkedHours(List<SaShiftAssignment> assignments)
+        {
+            double total = 0;
+            foreach (var assignment in assignments)
+            {
+                total += GetShiftDuration(assignment.ShiftId);
+            }
+            return total;
+        }
+
+        private double GetShiftDuration(int shiftId)
+        {
+            if (_shiftDurationLookup.TryGetValue(shiftId, out var duration))
+            {
+                return duration;
+            }
+
+            return 8;
         }
 
         private void PerformSwapMove(ShiftSolution solution)

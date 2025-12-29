@@ -3,10 +3,12 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using ShiftYar.Api.Filters;
 using ShiftYar.Application.Common.Models.ResponseModel;
+using ShiftYar.Application.Common.Utilities;
 using ShiftYar.Application.DTOs.ShiftModel.ShiftSchedulingModel;
 using ShiftYar.Application.Interfaces.ShiftModel;
 using ShiftYar.Domain.Entities.UserModel;
 using ShiftYar.Infrastructure.Persistence.AppDbContext;
+using System.ComponentModel;
 
 namespace ShiftYar.Api.Controllers.ShiftModel
 {
@@ -29,7 +31,6 @@ namespace ShiftYar.Api.Controllers.ShiftModel
         /// <param name="request">درخواست بهینه‌سازی</param>
         /// <returns>نتیجه بهینه‌سازی</returns>
         [HttpPost("optimize")]
-        [Authorize(Roles = "Admin,Supervisor")]
         public async Task<IActionResult> OptimizeShiftSchedule([FromBody] ShiftSchedulingRequestDto request)
         {
             try
@@ -39,7 +40,16 @@ namespace ShiftYar.Api.Controllers.ShiftModel
                     return BadRequest(ApiResponse<ShiftSchedulingResultDto>.Fail("Invalid request data"));
                 }
 
-                var result = await _shiftSchedulingService.OptimizeShiftScheduleAsync(request);
+                // تبدیل تاریخ‌های شمسی به میلادی
+                var internalRequest = new ShiftSchedulingRequestInternalDto
+                {
+                    DepartmentId = request.DepartmentId,
+                    StartDate = DateConverter.ConvertToGregorianDate(request.StartDate),
+                    EndDate = DateConverter.ConvertToGregorianDate(request.EndDate),
+                    Algorithm = request.Algorithm
+                };
+
+                var result = await _shiftSchedulingService.OptimizeShiftScheduleInternalAsync(internalRequest);
 
                 if (result.IsSuccess)
                 {
@@ -62,7 +72,6 @@ namespace ShiftYar.Api.Controllers.ShiftModel
         /// <param name="request">درخواست بهینه‌سازی</param>
         /// <returns>آمارهای الگوریتم</returns>
         [HttpPost("statistics")]
-        [Authorize(Roles = "Admin,Supervisor")]
         public async Task<IActionResult> GetAlgorithmStatistics([FromBody] ShiftSchedulingRequestDto request)
         {
             try
@@ -72,6 +81,16 @@ namespace ShiftYar.Api.Controllers.ShiftModel
                     return BadRequest(ApiResponse<object>.Fail("Invalid request data"));
                 }
 
+                // تبدیل تاریخ‌های شمسی به میلادی
+                var internalRequest = new ShiftSchedulingRequestInternalDto
+                {
+                    DepartmentId = request.DepartmentId,
+                    StartDate = DateConverter.ConvertToGregorianDate(request.StartDate),
+                    EndDate = DateConverter.ConvertToGregorianDate(request.EndDate),
+                    Algorithm = request.Algorithm
+                };
+
+                // دریافت آمار با اجرای سبک (می‌توانید یک مسیر آمار داخلی جداگانه اضافه کنید)
                 var result = await _shiftSchedulingService.GetAlgorithmStatisticsAsync(request);
 
                 if (result.IsSuccess)
@@ -95,7 +114,6 @@ namespace ShiftYar.Api.Controllers.ShiftModel
         /// <param name="request">درخواست بهینه‌سازی</param>
         /// <returns>نتیجه اعتبارسنجی</returns>
         [HttpPost("validate")]
-        [Authorize(Roles = "Admin,Supervisor")]
         public async Task<IActionResult> ValidateConstraints([FromBody] ShiftSchedulingRequestDto request)
         {
             try
@@ -105,6 +123,7 @@ namespace ShiftYar.Api.Controllers.ShiftModel
                     return BadRequest(ApiResponse<List<string>>.Fail("Invalid request data"));
                 }
 
+                // استفاده از متد اصلی که هنوز با DTO اصلی کار می‌کند
                 var result = await _shiftSchedulingService.ValidateConstraintsAsync(request);
 
                 if (result.IsSuccess)
@@ -128,7 +147,6 @@ namespace ShiftYar.Api.Controllers.ShiftModel
         /// <param name="result">نتیجه بهینه‌سازی</param>
         /// <returns>نتیجه ذخیره</returns>
         [HttpPost("save")]
-        [Authorize(Roles = "Admin,Supervisor")]
         public async Task<IActionResult> SaveOptimizedSchedule([FromBody] ShiftSchedulingResultDto result)
         {
             try
@@ -161,7 +179,6 @@ namespace ShiftYar.Api.Controllers.ShiftModel
         /// <param name="request">درخواست بهینه‌سازی</param>
         /// <returns>نتیجه کامل</returns>
         [HttpPost("optimize-and-save")]
-        [Authorize(Roles = "Admin,Supervisor")]
         public async Task<IActionResult> OptimizeAndSave([FromBody] ShiftSchedulingRequestDto request)
         {
             try
@@ -171,6 +188,15 @@ namespace ShiftYar.Api.Controllers.ShiftModel
                     return BadRequest(ApiResponse<object>.Fail("Invalid request data"));
                 }
 
+                // تبدیل تاریخ‌های شمسی به میلادی
+                var internalRequest = new ShiftSchedulingRequestInternalDto
+                {
+                    DepartmentId = request.DepartmentId,
+                    StartDate = DateConverter.ConvertToGregorianDate(request.StartDate),
+                    EndDate = DateConverter.ConvertToGregorianDate(request.EndDate),
+                    Algorithm = request.Algorithm
+                };
+
                 // اعتبارسنجی اولیه
                 var validationResult = await _shiftSchedulingService.ValidateConstraintsAsync(request);
                 if (!validationResult.IsSuccess || validationResult.Data.Count > 0)
@@ -179,7 +205,7 @@ namespace ShiftYar.Api.Controllers.ShiftModel
                 }
 
                 // اجرای بهینه‌سازی
-                var optimizationResult = await _shiftSchedulingService.OptimizeShiftScheduleAsync(request);
+                var optimizationResult = await _shiftSchedulingService.OptimizeShiftScheduleInternalAsync(internalRequest);
                 if (!optimizationResult.IsSuccess)
                 {
                     return BadRequest(optimizationResult);

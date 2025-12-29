@@ -101,7 +101,9 @@ namespace ShiftYar.API
                         ValidateIssuerSigningKey = true,
                         ValidIssuer = configuration["JwtConfig:Issuer"],
                         ValidAudience = configuration["JwtConfig:Audience"],
-                        IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(configuration["JwtConfig:Key"]))
+                        IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(configuration["JwtConfig:Key"])),
+                        // تنظیم RoleClaimType برای پشتیبانی از نقش‌ها
+                        RoleClaimType = System.Security.Claims.ClaimTypes.Role
                     };
                 });
             services.AddAuthorization();

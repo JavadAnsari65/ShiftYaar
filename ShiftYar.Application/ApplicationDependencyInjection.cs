@@ -18,6 +18,7 @@ using ShiftYar.Application.Interfaces.ShiftRequiredSpecialtyModel;
 using ShiftYar.Application.Features.ShiftRequiredSpecialtyModel.Services;
 using ShiftYar.Application.Interfaces.ShiftModel;
 using ShiftYar.Application.Features.ShiftModel.Services;
+using ShiftYar.Application.Features.ShiftModel.Rescheduling;
 using ShiftYar.Application.Interfaces.FileUploaderInterface;
 using ShiftYar.Application.Features.FileUploader.Services;
 using ShiftYar.Application.Features.CalendarSeeder.Services;
@@ -28,6 +29,13 @@ using ShiftYar.Application.Interfaces.ShiftRequestModel;
 using ShiftYar.Application.Features.ShiftRequestModel.Services;
 using ShiftYar.Application.Features.SmsModel;
 using ShiftYar.Application.Interfaces.SmsModel;
+using ShiftYar.Application.Interfaces;
+using ShiftYar.Application.Features.ShiftExchangeModel.Services;
+using ShiftYar.Application.Features.ShiftModel.PerformanceComparison;
+using ShiftYar.Application.Interfaces.Settings;
+using ShiftYar.Application.Features.Settings.Services;
+using ShiftYar.Application.Interfaces.ProductivityModel;
+using ShiftYar.Application.Features.ProductivityModel.Services;
 
 namespace ShiftYar.Application
 {
@@ -64,7 +72,12 @@ namespace ShiftYar.Application
             services.AddScoped<ISmsTemplateService, SmsTemplateService>();
             services.AddScoped<ISmsService, SmsService>();
             services.AddScoped<IShiftSchedulingService, ShiftSchedulingService>();
+            services.AddScoped<IEmergencyReschedulingService, EmergencyReschedulingService>();
+            services.AddScoped<AlgorithmPerformanceComparator>(); // ابزار مقایسه عملکرد الگوریتم‌ها
             services.AddScoped<IDepartmentSchedulingSettingsService, DepartmentSchedulingSettingsService>();
+            services.AddScoped<IShiftExchangeService, ShiftExchangeService>();
+            services.AddScoped<IAlgorithmSettingsService, AlgorithmSettingsService>();
+            services.AddScoped<IWorkingHoursCalculator, WorkingHoursCalculator>();
         }
     }
 }
