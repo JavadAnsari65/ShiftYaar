@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using ShiftYar.Application.Common.Constants;
 using ShiftYar.Application.Common.Models.ResponseModel;
 using ShiftYar.Application.DTOs.Settings;
 using ShiftYar.Application.Features.Settings.Filters;
@@ -11,7 +12,6 @@ using Microsoft.Extensions.Logging;
 namespace ShiftYar.Api.Controllers.Settings
 {
     [Authorize]
-    [ApiController]
     [Route("api/[controller]")]
     public class AlgorithmSettingsController : BaseController
     {
@@ -31,17 +31,31 @@ namespace ShiftYar.Api.Controllers.Settings
         public async Task<ActionResult<ApiResponse<PagedResponse<AlgorithmSettingsDtoGet>>>> GetSettings([FromQuery] AlgorithmSettingsFilter filter)
         {
             // Logging برای دیباگ
-            var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
+            var userId = User.FindFirstValue(JwtClaimTypes.Sub);
             var roles = User.Claims
-                .Where(c => c.Type == ClaimTypes.Role)
+                .Where(c => c.Type == JwtClaimTypes.Role)
                 .Select(c => c.Value)
                 .ToList();
-            
+
             _logger.LogInformation("GetSettings called - UserId: {UserId}, Roles: {Roles}", userId, string.Join(", ", roles));
-            
+
             var result = await _service.GetSettingsAsync(filter);
             return Ok(result);
         }
+        //public async Task<ActionResult<ApiResponse<PagedResponse<AlgorithmSettingsDtoGet>>>> GetSettings([FromQuery] AlgorithmSettingsFilter filter)
+        //{
+        //    // Logging برای دیباگ
+        //    var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        //    var roles = User.Claims
+        //        .Where(c => c.Type == ClaimTypes.Role)
+        //        .Select(c => c.Value)
+        //        .ToList();
+
+        //    _logger.LogInformation("GetSettings called - UserId: {UserId}, Roles: {Roles}", userId, string.Join(", ", roles));
+
+        //    var result = await _service.GetSettingsAsync(filter);
+        //    return Ok(result);
+        //}
 
         /// <summary>
         /// دریافت تنظیمات الگوریتم بر اساس شناسه
@@ -59,23 +73,42 @@ namespace ShiftYar.Api.Controllers.Settings
         /// </summary>
         [HttpGet("by-department-and-type")]
         public async Task<ActionResult<ApiResponse<AlgorithmSettingsDtoGet>>> GetSettingByDepartmentAndType(
-            [FromQuery] int? departmentId, 
+            [FromQuery] int? departmentId,
             [FromQuery] int algorithmType)
         {
             // Logging برای دیباگ
-            var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
+            var userId = User.FindFirstValue(JwtClaimTypes.Sub);
             var roles = User.Claims
-                .Where(c => c.Type == ClaimTypes.Role)
+                .Where(c => c.Type == JwtClaimTypes.Role)
                 .Select(c => c.Value)
                 .ToList();
-            
-            _logger.LogInformation("GetSettingByDepartmentAndType called - UserId: {UserId}, Roles: {Roles}, DepartmentId: {DepartmentId}, AlgorithmType: {AlgorithmType}", 
+
+            _logger.LogInformation("GetSettingByDepartmentAndType called - UserId: {UserId}, Roles: {Roles}, DepartmentId: {DepartmentId}, AlgorithmType: {AlgorithmType}",
                 userId, string.Join(", ", roles), departmentId, algorithmType);
-            
+
             var result = await _service.GetSettingByDepartmentAndTypeAsync(departmentId, algorithmType);
             if (!result.IsSuccess) return NotFound(result);
             return Ok(result);
         }
+        //public async Task<ActionResult<ApiResponse<AlgorithmSettingsDtoGet>>> GetSettingByDepartmentAndType(
+        //    [FromQuery] int? departmentId, 
+        //    [FromQuery] int algorithmType)
+        //{
+        //    // Logging برای دیباگ
+        //    var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        //    var roles = User.Claims
+        //        .Where(c => c.Type == ClaimTypes.Role)
+        //        .Select(c => c.Value)
+        //        .ToList();
+
+        //    _logger.LogInformation("GetSettingByDepartmentAndType called - UserId: {UserId}, Roles: {Roles}, DepartmentId: {DepartmentId}, AlgorithmType: {AlgorithmType}", 
+        //        userId, string.Join(", ", roles), departmentId, algorithmType);
+
+        //    var result = await _service.GetSettingByDepartmentAndTypeAsync(departmentId, algorithmType);
+        //    if (!result.IsSuccess) return NotFound(result);
+        //    return Ok(result);
+        //}
+
 
         /// <summary>
         /// ایجاد تنظیمات جدید الگوریتم
@@ -84,18 +117,34 @@ namespace ShiftYar.Api.Controllers.Settings
         public async Task<ActionResult<ApiResponse<AlgorithmSettingsDtoGet>>> CreateSetting([FromBody] AlgorithmSettingsDtoAdd dto)
         {
             // Logging برای دیباگ
-            var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
+            var userId = User.FindFirstValue(JwtClaimTypes.Sub);
             var roles = User.Claims
-                .Where(c => c.Type == ClaimTypes.Role)
+                .Where(c => c.Type == JwtClaimTypes.Role)
                 .Select(c => c.Value)
                 .ToList();
-            
+
             _logger.LogInformation("CreateSetting called - UserId: {UserId}, Roles: {Roles}", userId, string.Join(", ", roles));
-            
+
             var result = await _service.CreateSettingAsync(dto);
             if (!result.IsSuccess) return BadRequest(result);
             return CreatedAtAction(nameof(GetSetting), new { id = result.Data.Id }, result);
         }
+        //public async Task<ActionResult<ApiResponse<AlgorithmSettingsDtoGet>>> CreateSetting([FromBody] AlgorithmSettingsDtoAdd dto)
+        //{
+        //    // Logging برای دیباگ
+        //    var userId = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        //    var roles = User.Claims
+        //        .Where(c => c.Type == ClaimTypes.Role)
+        //        .Select(c => c.Value)
+        //        .ToList();
+
+        //    _logger.LogInformation("CreateSetting called - UserId: {UserId}, Roles: {Roles}", userId, string.Join(", ", roles));
+
+        //    var result = await _service.CreateSettingAsync(dto);
+        //    if (!result.IsSuccess) return BadRequest(result);
+        //    return CreatedAtAction(nameof(GetSetting), new { id = result.Data.Id }, result);
+        //}
+
 
         /// <summary>
         /// ویرایش تنظیمات الگوریتم
@@ -107,6 +156,7 @@ namespace ShiftYar.Api.Controllers.Settings
             if (!result.IsSuccess) return NotFound(result);
             return Ok(result);
         }
+
 
         /// <summary>
         /// حذف تنظیمات الگوریتم

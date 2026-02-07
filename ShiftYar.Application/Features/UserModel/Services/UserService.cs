@@ -1,6 +1,7 @@
 ﻿using AutoMapper;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
+using ShiftYar.Application.Common.Constants;
 using ShiftYar.Application.Common.Models.ResponseModel;
 using ShiftYar.Application.Common.Utilities;
 using ShiftYar.Application.DTOs.UserModel;
@@ -145,7 +146,9 @@ namespace ShiftYar.Application.Features.UserModel.Services
 
                 user.Image = _fileUploader.UploadFile(dto.Image, "Users");
                 user.CreateDate = DateTime.Now;
-                user.TheUserId = Convert.ToInt16(_httpContextAccessor.HttpContext.User.FindFirst(ClaimTypes.NameIdentifier));
+                //user.TheUserId = Convert.ToInt16(_httpContextAccessor.HttpContext.User.FindFirst(ClaimTypes.NameIdentifier));
+                var sub = _httpContextAccessor.HttpContext?.User?.FindFirst(JwtClaimTypes.Sub)?.Value;
+                user.TheUserId = (short)(sub != null && int.TryParse(sub, out var uid) ? uid : 0);
 
                 await _repository.AddAsync(user);
                 await _repository.SaveAsync();
@@ -335,7 +338,9 @@ namespace ShiftYar.Application.Features.UserModel.Services
                 }
 
                 user.CreateDate = DateTime.Now;
-                user.TheUserId = Convert.ToInt16(_httpContextAccessor.HttpContext.User.FindFirst(ClaimTypes.NameIdentifier));
+                //user.TheUserId = Convert.ToInt16(_httpContextAccessor.HttpContext.User.FindFirst(ClaimTypes.NameIdentifier));
+                var sub = _httpContextAccessor.HttpContext?.User?.FindFirst(JwtClaimTypes.Sub)?.Value;
+                user.TheUserId = (short)(sub != null && int.TryParse(sub, out var uid) ? uid : 0);
 
                 _repository.Update(user);
                 await _repository.SaveAsync();

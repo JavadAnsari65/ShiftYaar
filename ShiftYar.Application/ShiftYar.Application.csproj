@@ -27,6 +27,7 @@
 	<PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="9.0.4" />
 	<PackageReference Include="Microsoft.AspNetCore.App" />
 	  <PackageReference Include="Google.OrTools" Version="9.14.6206" />
+	  <PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="8.15.0" />
   </ItemGroup>
 
 </Project>

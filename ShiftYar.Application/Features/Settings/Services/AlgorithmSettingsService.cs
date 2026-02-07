@@ -1,6 +1,7 @@
 using AutoMapper;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
+using ShiftYar.Application.Common.Extensions;
 using ShiftYar.Application.Common.Models.ResponseModel;
 using ShiftYar.Application.DTOs.Settings;
 using ShiftYar.Application.Features.Settings.Filters;
@@ -270,8 +271,9 @@ namespace ShiftYar.Application.Features.Settings.Services
         {
             try
             {
-                var userIdClaim = _httpContextAccessor.HttpContext?.User?.FindFirst(ClaimTypes.NameIdentifier);
-                return userIdClaim != null ? Convert.ToInt32(userIdClaim.Value) : 0;
+                //var userIdClaim = _httpContextAccessor.HttpContext?.User?.FindFirst(ClaimTypes.NameIdentifier);
+                //return userIdClaim != null ? Convert.ToInt32(userIdClaim.Value) : 0;
+                return _httpContextAccessor.HttpContext?.User?.GetUserIdAsInt() ?? 0;
             }
             catch
             {

@@ -1,5 +1,6 @@
 ﻿using Microsoft.Extensions.Configuration;
 using Microsoft.IdentityModel.Tokens;
+//using ShiftYar.Application.Common.Constants;
 using ShiftYar.Application.Interfaces.Security;
 using ShiftYar.Domain.Entities.SecurityModel;
 using ShiftYar.Domain.Entities.UserModel;
@@ -27,18 +28,26 @@ namespace ShiftYar.Infrastructure.Services.Security
         {
             var claims = new List<Claim>
             {
-                new Claim(ClaimTypes.NameIdentifier, user.Id.ToString()),
-                new Claim(ClaimTypes.Name, user.FullName),
+                ////new Claim(ClaimTypes.NameIdentifier, user.Id.ToString()),
+                ////new Claim(ClaimTypes.Name, user.FullName),
+                //new Claim(JwtClaimNames.Sub, user.Id.ToString()),
+                //new Claim(JwtClaimNames.Name, user.FullName ?? string.Empty),
+                new Claim("Sub", user.Id.ToString()),
+                new Claim("Name", user.FullName ?? string.Empty),
             };
 
             foreach (var role in roles)
             {
-                claims.Add(new Claim(ClaimTypes.Role, role));
+                ////claims.Add(new Claim(ClaimTypes.Role, role));
+                //claims.Add(new Claim(JwtClaimTypes.Role, role));
+                claims.Add(new Claim("Role", role));
             }
 
             foreach (var permission in permissions)
             {
-                claims.Add(new Claim("permission", permission));
+                ////claims.Add(new Claim("permission", permission));
+                //claims.Add(new Claim(JwtClaimTypes.Permission, permission));
+                claims.Add(new Claim("Permission", permission));
             }
 
             var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_config["JwtConfig:Key"]));

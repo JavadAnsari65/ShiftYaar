@@ -2,6 +2,7 @@
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 using ShiftYar.Api.Filters;
+using ShiftYar.Application.Common.Constants;
 using System.Text;
 
 namespace ShiftYar.API
@@ -102,8 +103,11 @@ namespace ShiftYar.API
                         ValidIssuer = configuration["JwtConfig:Issuer"],
                         ValidAudience = configuration["JwtConfig:Audience"],
                         IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(configuration["JwtConfig:Key"])),
-                        // تنظیم RoleClaimType برای پشتیبانی از نقش‌ها
-                        RoleClaimType = System.Security.Claims.ClaimTypes.Role
+                        //// تنظیم RoleClaimType برای پشتیبانی از نقش‌ها
+                        //RoleClaimType = System.Security.Claims.ClaimTypes.Role
+                        // تنظیم RoleClaimType و NameClaimType برای پشتیبانی از claim types استاندارد JWT
+                        RoleClaimType = JwtClaimTypes.Role,
+                        NameClaimType = JwtClaimTypes.Name
                     };
                 });
             services.AddAuthorization();

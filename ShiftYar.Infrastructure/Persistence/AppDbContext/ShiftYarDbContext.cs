@@ -11,6 +11,7 @@ using ShiftYar.Domain.Entities.ShiftModel;
 using ShiftYar.Domain.Entities.ShiftRequestModel;
 using ShiftYar.Domain.Entities.ShiftExchangeModel;
 using ShiftYar.Domain.Entities.SmsModel;
+using ShiftYar.Domain.Entities.Settings;
 using ShiftYar.Domain.Entities.UserModel;
 using System;
 using System.Collections.Generic;
@@ -56,6 +57,7 @@ namespace ShiftYar.Infrastructure.Persistence.AppDbContext
         public DbSet<OtpCode> OtpCodes { get; set; }
         public DbSet<PasswordResetCode> PasswordResetCodes { get; set; }
         public DbSet<SmsTemplate> SmsTemplates { get; set; }
+        public DbSet<AlgorithmSettings> AlgorithmSettings { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -83,6 +85,13 @@ namespace ShiftYar.Infrastructure.Persistence.AppDbContext
                 .HasMany(d => d.DepartmentUsers)
                 .WithOne(u => u.Department)
                 .HasForeignKey(u => u.DepartmentId);
+
+
+            modelBuilder.Entity<AlgorithmSettings>()
+                .HasOne(a => a.Department)
+                .WithMany()
+                .HasForeignKey(a => a.DepartmentId)
+                .OnDelete(DeleteBehavior.SetNull);
 
             base.OnModelCreating(modelBuilder);
         }
